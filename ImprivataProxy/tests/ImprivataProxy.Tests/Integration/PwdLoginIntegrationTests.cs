@@ -3,7 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Xml.Linq;
 using ImprivataProxy.Sources.Local;
-using ImprivataProxy.IdpCore.Audit;
+using ImprivataProxy.Shared.Contracts;
 using ImprivataProxy.Tests.Helpers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;

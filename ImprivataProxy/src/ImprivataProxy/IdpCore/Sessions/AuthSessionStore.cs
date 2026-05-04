@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 using ImprivataProxy.Sources.Local;
-using ImprivataProxy.IdpCore.Audit;
+using ImprivataProxy.Shared.Contracts;
 using ImprivataProxy.Sources.Local.Entities;
 using Microsoft.EntityFrameworkCore;
 

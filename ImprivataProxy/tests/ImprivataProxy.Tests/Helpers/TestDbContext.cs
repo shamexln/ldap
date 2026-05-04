@@ -1,5 +1,5 @@
 using ImprivataProxy.Sources.Local;
-using ImprivataProxy.IdpCore.Audit;
+using ImprivataProxy.Shared.Contracts;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 

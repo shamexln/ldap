@@ -1,5 +1,6 @@
 using ImprivataProxy.Sources.Local;
 using ImprivataProxy.Sources.Contracts;
+using ImprivataProxy.Shared.Contracts;
 using ImprivataProxy.IdpCore.Audit;
 using ImprivataProxy.Sources.ActiveDirectory;
 using ImprivataProxy.Facades.Admin;

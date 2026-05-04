@@ -1,4 +1,4 @@
-namespace ImprivataProxy.IdpCore.Audit;
+namespace ImprivataProxy.Shared.Contracts;
 
 public interface IAuditLogger
 {

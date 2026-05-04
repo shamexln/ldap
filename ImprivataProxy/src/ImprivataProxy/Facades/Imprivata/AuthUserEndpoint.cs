@@ -2,7 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Xml.Linq;
 using ImprivataProxy.Sources.Local;
-using ImprivataProxy.IdpCore.Audit;
+using ImprivataProxy.Shared.Contracts;
 using ImprivataProxy.IdpCore.Authentication;
 using ImprivataProxy.IdpCore.Sessions;
 using ImprivataProxy.IdpCore.Tokens;

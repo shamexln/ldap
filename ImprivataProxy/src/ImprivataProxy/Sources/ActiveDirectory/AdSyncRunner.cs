@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using ImprivataProxy.Sources.Contracts;
 using ImprivataProxy.Sources.Local;
-using ImprivataProxy.IdpCore.Audit;
+using ImprivataProxy.Shared.Contracts;
 
 namespace ImprivataProxy.Sources.ActiveDirectory;
 

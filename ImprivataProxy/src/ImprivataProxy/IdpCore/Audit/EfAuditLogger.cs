@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ImprivataProxy.Shared.Contracts;
 using ImprivataProxy.Sources.Local;
 using ImprivataProxy.Sources.Local.Entities;
 using Microsoft.AspNetCore.Http;

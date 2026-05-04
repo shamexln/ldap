@@ -1,4 +1,5 @@
 using ImprivataProxy.Sources.Local;
+using ImprivataProxy.Shared.Contracts;
 using ImprivataProxy.IdpCore.Audit;
 using ImprivataProxy.Sources.ActiveDirectory;
 using ImprivataProxy.Tests.Helpers;
