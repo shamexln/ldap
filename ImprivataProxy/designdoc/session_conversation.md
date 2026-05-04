@@ -2310,3 +2310,644 @@ interface IUserDirectorySync     { ... }   // AdSyncService 实现
 3. **UID/PIN 天然本地**,无论选 AD 还是 SAML,这段都是 plan.md 实现
 4. **决策采用 AD LDAP**(贴合医疗现场 / 本地 AD / 弱网 / 胖客户端)
 5. **留扩展口**:接口抽象 + Identity.Source 枚举,未来可切 SAML ECP+SCIM 混合,核心代码零改动
+
+---
+
+## 👤 用户 [14:15:02]
+
+SAML和LDAP(特别是AD)的区别?
+
+---
+
+## 🤖 助手 [14:15:45]
+
+**一句话区分**:
+- **LDAP** = "目录数据库的**查询协议**"(你问它 alice 是谁、组是什么、密码对不对)
+- **SAML** = "跨系统的**身份断言协议**"(IdP 签名说"这个人是 alice,验过了",SP 信这个签名)
+- **AD** = 微软的**目录服务产品**,**同时实现 LDAP + Kerberos + DNS** 等多个协议
+
+三者解决不同层次的问题,不是竞品关系。核心对照表(14 维度)+ 数据流对比图 + 协议实现表(AD 端口 389/636/88/53/...,ADFS 组件才提供 SAML)。
+
+**本项目选择**:典型 LDAP 场景 — 胖客户端、医疗现场、本地部署、需直接验证密码。**不适合 SAML**。
+
+---
+
+## 👤 用户 [14:35:18]
+
+可以将 imprivata 认证看作一个 idp 吗?如果这样的话,怎么设计?
+
+---
+
+## 🤖 助手 [14:36:02]
+
+**可以,而且这样看架构会更清晰**。[LDAP.md §1.1](./LDAP.md#L7) 已悄悄这样写—— "**本地身份提供者(Local IdP)服务**",只是没把这层抽象拉到头。
+
+**Imprivata ProveID Web API 就是个 IdP**(8 项能力逐一映射):
+| IdP 标准职责 | Imprivata 对应 |
+|------------|--------------|
+| 接受认证请求 | `POST /AuthUser` |
+| 多因子认证 | PWD/UID/PIN/FP/PKI/KRB/OTP |
+| 会话状态机 | `ServerState`(多步) |
+| 签发凭证 | AuthTicket(OStick) |
+| 验证凭证 | `Authorization: OStick ostick.ticket=...` |
+| 撤销 | `CANCEL /AuthUser` |
+| 属性发布 | `<UserIdentity>`, `<SAMLArtifact>` |
+| 服务发现 | `/Servers`, `/Modalities` |
+
+**三层正式化架构**:`Protocol Facades + IdP Core + Identity Sources`
+- **Facades**:翻译外部协议 ↔ IdP Core(Imprivata XML + 未来 SAML/OIDC)
+- **IdP Core**:认证策略、会话、签票、审计(协议无关)
+- **Sources**:Local DB + Active Directory(可插拔身份源)
+
+**关键接口**(5 个):`IProtocolFacade` / `IAuthenticator<TInput>` / `ITokenIssuer<TToken>` / `IRemotePasswordVerifier` / `IUserDirectorySync`。
+
+**建议沉淀 ADR-0002**。
+
+---
+
+## 👤 用户 [14:55:30]
+
+起草 ADR-0002 designdoc/adr-0002-idp-architecture.md,把这套分层和对应的接口契约写成正式决策给我
+
+---
+
+## 🤖 助手 [14:56:15]
+
+**工具调用:**
+- [Write: designdoc/adr-0002-idp-architecture.md — 23.5KB / 587 行 / 12 节]
+
+**结构**:
+1. 背景 2. 核心洞察 3. 决策(三层) 4. 11 个完整接口契约 5. 目录结构 6. 迁移计划 α/β/γ 7. 解锁的能力 8. 反模式(5 种) 9. 风险权衡 10. 回顾触发 11. 与 ADR-0001 关系 12. 参考 + 附录 A DI 示例
+
+命名不一致提示:ADR-0001 的 `adsync-vs-saml.md` 没有 `adr-0001-` 前缀,问是否重命名。
+
+---
+
+## 👤 用户 [15:10:08]
+
+第一个重命名为 adr-0001-adsync-vs-saml.md
+
+---
+
+## 🤖 助手 [15:10:40]
+
+**工具调用:**
+- [Grep: 找 adsync-vs-saml 引用(3 文件)]
+- [Bash: mv adsync-vs-saml.md adr-0001-adsync-vs-saml.md]
+- [Edit: LDAP.md 链接 + adr-0002 3 处交叉引用 + session_conversation 2 处 link]
+- [Edit: LDAP.md §1.2 加 ADR-0002 绿书横幅]
+
+现在两个 ADR 命名一致:`adr-0001-adsync-vs-saml.md` + `adr-0002-idp-architecture.md`。
+
+---
+
+## 👤 用户 [15:25:12]
+
+按照现在的设计,如果 Imprivata 的胖客户端提出请求,代码的逻辑怎么走,给我流程图以及 UML Sequence 图
+
+---
+
+## 🤖 助手 [15:25:50]
+
+进入 plan 模式。勘探代码 —— 发现:
+- 现有 `designdoc/diagrams/pipeline.puml` 已有 3 张 sequence 图(PWD / UID+PIN / AD sync)
+- 缺 UID-only 单步 sequence 图
+- 缺流程图(决策树 activity 形式)
+
+问用户粒度:1 张统一 flowchart + 追加 UID-only sequence,vs 3 张分场景 + sequence 全增强。
+
+---
+
+## 👤 用户 [15:35:20]
+
+[选项回答]
+"1 张统一 flowchart(推荐)" + "保留现有 pipeline.puml 不动,仅追加 UID-only(推荐)"
+
+---
+
+## 🤖 助手 [15:35:40]
+
+[ExitPlanMode - 用户让停止]
+
+---
+
+## 👤 用户 [15:38:05]
+
+按照 ADR-0002 的变更设计,给我如果 Imprivata 的胖客户端提出请求,代码的逻辑怎么走,给我流程图以及 UML Sequence 图
+
+---
+
+## 🤖 助手 [15:38:30]
+
+**理解**:scope 改成 ADR-0002 的目标架构(Facade/IdpCore/Sources),不是当前代码。
+
+重写 plan:
+- 新建 `adr-0002-authuser-flowchart.puml`(swimlane activity,三泳道 Facade/IdpCore/Sources)
+- 新建 `adr-0002-authuser-sequence.puml`(3 个 @startuml:PWD / UID / PIN)
+- 所有 participant 用**接口名**(`IAuthenticator<T>` / `IUserStore` / `ITokenIssuer<OStickTicket>`)严格对齐 ADR-0002 §4 契约
+
+---
+
+## 👤 用户 [15:55:40]
+
+接受你的plan
+
+---
+
+## 🤖 助手 [15:56:10]
+
+**工具调用:**
+- [Write: adr-0002-authuser-flowchart.puml — swimlane activity, 4.8KB]
+- [Write: adr-0002-authuser-sequence.puml — 3 块 sequence(PWD/UID/PIN), 7.1KB]
+- [Edit: adr-0002-idp-architecture.md §12 图示(新)+ §13 参考(原 §12)]
+- [Grep: 反模式校验 — Facade→US/RV 零,47 合法跨层调用]
+
+ADR-0002 从 12 节扩到 13 节 + 附录 A。
+
+---
+
+## 👤 用户 [16:15:18]
+
+按照这个方案修改代码
+
+---
+
+## 🤖 助手 [16:15:45]
+
+**工具调用:**
+- [EnterPlanMode — 跨 30+ 文件重构必须先规划]
+- [Agent Explore: 勘探代码结构 —— 67 源文件、31 测试、11 个现有接口、DomainsEndpoint §8.1 违规]
+
+提出 3 stage 拆分(β / α / 管理 API 清理 / 反模式 grep),问用户 scope:
+- 仅 β + 小清理(推荐)
+- β + α 全套
+- 仅 β 纯移动
+
+---
+
+## 👤 用户 [16:30:22]
+
+β + α 全套 + Admin 也改走 IUserStore
+
+---
+
+## 🤖 助手 [16:30:50]
+
+Scope 升级,重写 plan 为 4 Stage:
+1. Phase β 目录重组 + namespace 改名
+2. Phase α 新增 `Sources/Contracts/IRemotePasswordVerifier` + `IUserDirectorySync`,现有类实现
+3. `IUserStore` 扩展(Admin 所需 8 方法)+ `UsersController`/`CardsController`/`DomainsEndpoint` 改走 Store
+4. 反模式 grep 校验 + Migrations 元数据修
+
+比对 ADR-0002 §6 Phase α 保守版(§6 定义 vs §4 完整契约)—— 推荐保守版,问确认。
+
+---
+
+## 👤 用户 [16:45:02]
+
+保持我当前 plan(§6 保守版)
+
+---
+
+## 🤖 助手 [16:45:25]
+
+**ExitPlanMode,开始执行**:
+
+- **Stage 0 基线**:216/216 绿
+- **Stage 1** Phase β:bash `mv` 批量 + sed 批量 namespace 改名,70+ 文件;11 个初始编译错误(跨 namespace 引用),逐个 Edit 修 using;216/216 绿
+- **Stage 2** Phase α:新建 `IRemotePasswordVerifier` / `IUserDirectorySync`,`LdapClient` / `AdSyncRunner` 实现;Program.cs DI 用适配器模式 `sp => (IX)sp.GetRequiredService<Concrete>()` 共享单例
+- **Stage 3** IUserStore 扩展 8 方法 + 3 控制器 + DomainsEndpoint 改造;3 个测试 fixture 改用 `new UserStore(Ctx.Db)`
+- **Stage 4** 反模式 grep:§8.1 零违规;§8.2(EfAuditLogger 仍吃 DbContext+HTTP)/ §8.3(AdSyncRunner using IdpCore.Audit)plan 风险表标"暂忍";Migrations 元数据 namespace 字符串修
+
+验证:clean build + 216/216 tests。**未 commit,工作树保留**。
+
+---
+
+## 👤 用户 [17:00:55]
+
+Phase α 和 Phase β 都跑完了?
+
+---
+
+## 🤖 助手 [17:01:22]
+
+**答:Phase β ✅;Phase α ⚠️ 只完成"保守版"**。
+
+对照 ADR-0002 §6 定义(保守)vs §4 完整契约:
+- §6 Phase α(保守版)= 100% 完成(IRemotePasswordVerifier + IUserDirectorySync + DI + 非破坏)
+- §4 完整契约 = **5/11(45%)**,还剩 6 项:泛型 IAuthenticator<T> / ITokenIssuer<T> / IAuditSink 重命名 / ILockoutPolicy / IProtocolFacade / 各层 Contracts/ 子目录
+
+§5 目录结构也只做了 Sources/Contracts,其他层接口仍散在原目录。
+
+---
+
+## 👤 用户 [17:10:08]
+
+§8.2/§8.3 2 为什么没有修改?
+
+---
+
+## 🤖 助手 [17:10:30]
+
+**承认**:
+- **§8.2**(EfAuditLogger 依赖 AppDbContext + IHttpContextAccessor)—— plan 风险表显式标"暂忍",与 IAuditStore 抽象一并下次做
+- **§8.3**(AdSyncRunner/Service using IdpCore.Audit)—— **plan 漏写,实施漏修,是我的疏忽**
+
+修 §8.3 的方案 A:把 `IAuditLogger.cs` 从 `IdpCore/Audit/` 搬到 `Shared/Contracts/`,10 分钟可做。问是否要。
+
+---
+
+## 👤 用户 [17:15:22]
+
+plan.md 风险表在哪里?
+
+---
+
+## 🤖 助手 [17:15:40]
+
+**澄清**:我引用的是**会话级 plan 文件** `C:\Users\admin\.claude\plans\imprivata-uml-sequence-jazzy-bengio.md`,不是项目的 `ImprivataProxy/plan.md`。上次说"plan.md 风险表"是表述失准。
+
+该文件是 Claude Code 的一次性会话级 plan,不属于项目仓库,会话结束后会丢失。
+
+**固化方案**:复制到 `designdoc/adr-0002-phase-ab-implementation.md` 作为归档(项目永久保留)。
+
+---
+
+## 👤 用户 [17:20:05]
+
+可以
+
+---
+
+## 🤖 助手 [17:20:30]
+
+**工具调用:**
+- [Write: adr-0002-phase-ab-implementation.md — 14KB / 335 行]
+- [Edit: adr-0002-idp-architecture.md 头部加"实施记录"行引用]
+
+包含:事后摘要(已完成 11 / 已知遗留 9)+ 原始 plan 存档 + 执行过程表 + 下一步路线图。
+
+---
+
+## 👤 用户 [17:30:18]
+
+写成独立的 CHANGELOG / ADR-0002 附录
+
+---
+
+## 🤖 助手 [17:30:50]
+
+**工具调用:**
+- [Write: CHANGELOG.md — 4.6KB, Keep-a-Changelog 格式]
+- [Edit: adr-0002-idp-architecture.md 新增 §附录 B 状态卡片]
+
+三层文档分工:
+- CHANGELOG.md —— 给外部 / PR 审查者
+- ADR-0002 §附录 B —— 给架构评审者("决策 + 实施状态")
+- adr-0002-phase-ab-implementation.md —— 给具体实施者(详细过程)
+
+---
+
+## 👤 用户 [17:45:12]
+
+现在这一步是可以提交的稳定中间态,怎么提交?我最终想提交到github,git@github.com:shamexln/ldap.git
+
+---
+
+## 🤖 助手 [17:45:40]
+
+**工具调用:**
+- [Bash: git rev-parse — 不是 git 仓库]
+- [AskUserQuestion: GitHub 仓库空/有内容? commit 粒度? commit message 格式?]
+
+收到答案:空仓库 / 4 个 commit 按阶段拆 / 无 Jira 前缀。问 git identity + claude 相关内容排除规则。
+
+---
+
+## 👤 用户 [17:50:33]
+
+记住任何和claude相关的不要提交 + (后续) C:\project\LDAP\.idea目录以及C:\project\LDAP\.claude目录还有CLAUDE.md以及AGENTS.md不要提交,其它都提交
+
+---
+
+## 🤖 助手 [17:51:00]
+
+**工具调用:**
+- [Write: ~/.claude/projects/c--project-LDAP/memory/feedback_no_claude_commits.md — 记忆规则]
+- [Write: MEMORY.md 索引]
+
+规则:排除 `.claude/`, `.idea/`, `CLAUDE.md`, `AGENTS.md`;其他全提交(包括 session_conversation 和 ADR)。
+
+---
+
+## 👤 用户 [17:55:45]
+
+shamexln shamexln@hotmail.com
+
+---
+
+## 🤖 助手 [17:56:12]
+
+**工具调用:**
+- [Bash: git init -b main + config user.name/email(仓库局部)]
+- [Write: .gitignore — 排除用户指定 + 构建产物]
+- [4 个 git add + commit,按 scaffold / src / tests / docs 拆]
+- [git remote add origin + git push -u origin main]
+
+**push 失败**:Host key verification failed — 本机无 `.ssh/`,无 key,无 known_hosts。
+
+选项:A. HTTPS + 浏览器 B. 生成 SSH 密钥 C. gh CLI D. 用户自己搞。
+
+---
+
+## 👤 用户 [18:00:18]
+
+生成 SSH 密钥,然后手动加到 GitHub
+
+---
+
+## 🤖 助手 [18:00:40]
+
+**工具调用:**
+- [Bash: mkdir ~/.ssh + ssh-keygen -t ed25519 无密码 + ssh-keyscan 写 known_hosts]
+- [Bash: 打印公钥让用户粘贴到 GitHub Settings → SSH Keys]
+
+等用户添加完毕。
+
+---
+
+## 👤 用户 [18:15:08]
+
+完成了
+
+---
+
+## 🤖 助手 [18:15:25]
+
+**工具调用:**
+- [Bash: ssh -T git@github.com — "Hi shamexln!" 验证通过]
+- [Bash: git push -u origin main — 4 commits 上线]
+
+**4 个初始 commit**:`b8e4309 chore: project scaffolding` / `df1f101 feat: local IdP with 3-layer architecture` / `c64d226 test: 216 tests` / `d752548 docs: design docs + ADRs + diagrams`
+
+仓库:`github.com/shamexln/ldap`,初始 push 完成。
+
+---
+
+## 👤 用户 [18:30:42]
+
+新建一个task,完成ADR-0002 §5 各层 Contracts/ 子目录 ⚠️ 1/4(只 Sources/) + §8 反模式 §8.2/§8.3 2 处遗留(plan 已标"暂忍")
+
+---
+
+## 🤖 助手 [18:31:15]
+
+[EnterPlanMode] 设计 3 Stage:
+1. §5 Contracts/ 子目录机械搬(8 个 IdpCore 接口 + IUserStore 到 Sources/Contracts)
+2. §8.3 fix:IAuditLogger → Shared/Contracts(搬接口,实现保留)
+3. §8.2 fix:抽 IAuditStore + IClientContextProvider,重写 EfAuditLogger 为纯编排
+
+推荐 3 commit 按 Stage 拆。ExitPlanMode 批准。
+
+**执行**:
+- Stage 1 `9d4a730`:8 IdpCore 接口搬 Contracts + IUserStore 搬 Sources/Contracts,7 文件加 using,216 绿
+- Stage 2 `9bb87ec`:sed mass rename `using ImprivataProxy.IdpCore.Audit` → `using ImprivataProxy.Shared.Contracts`,12 源 + 2 测试 + Program.cs;实现类 EfAuditLogger 仍在 IdpCore.Audit,补回 using;216 绿
+- Stage 3 `fd1e155`:新建 4 文件(IAuditStore + EfAuditStore + IClientContextProvider + HttpClientContextProvider);重写 EfAuditLogger;Program.cs +2 DI;8 测试 fixture 改 `new EfAuditLogger(new EfAuditStore(Ctx.Db))`;216 绿
+
+3 commits 一次 push。**注意**:§8.2 grep 发现 `AuthSessionStore` / `TicketBlacklistService` 也直接用 AppDbContext —— 同模式但不在本轮 scope,记为"新识别遗留项"。
+
+---
+
+## 👤 用户 [19:00:22]
+
+§8.2 剩余 —— AuthSessionStore + TicketBlacklistService 拆成 policy/store(~30 min,用本轮的模板),先解决
+
+---
+
+## 🤖 助手 [19:00:50]
+
+**工具调用**(沿用上轮模板):
+- [Write: Sources/Contracts/IAuthSessionRepo.cs + Local/EfAuthSessionRepo.cs]
+- [Write: Sources/Contracts/ITicketBlacklistRepo.cs + Local/EfTicketBlacklistRepo.cs]
+- [Write: IdpCore/Sessions/AuthSessionStore.cs 重写 — policy 保留 serverState 生成 + TTL + 清理 cadence,委派 repo]
+- [Write: IdpCore/Tokens/TicketBlacklistService.cs 重写 — policy 保留 dedup + 5-min GC]
+- [Edit: Program.cs +2 DI]
+- [Bash: sed 批量更新 13 处测试 fixture 的 `new AuthSessionStore(ctx.Db)` → `new AuthSessionStore(new EfAuthSessionRepo(ctx.Db))`]
+
+commit `c48f325` 推送。**§8.2 反模式**:IdpCore 下 `grep "AppDbContext|IHttpContextAccessor"` **零命中**。
+
+---
+
+## 👤 用户 [19:15:08]
+
+1. IAuditSink 重命名 先做这个
+
+---
+
+## 🤖 助手 [19:15:30]
+
+**工具调用**:
+- [Bash: mv Shared/Contracts/IAuditLogger.cs IAuditSink.cs + mv IdpCore/Audit/EfAuditLogger.cs AuditLogSink.cs]
+- [Bash: find | sed 全项目 `IAuditLogger` → `IAuditSink`,`EfAuditLogger` → `AuditLogSink`]
+
+20 文件改动,+36/-36 行,纯标识符替换。顺便清 `Ef` 前缀 —— 这个类在 §8.2 fix 后已不直接碰 EF,`Ef` 变成误导。
+
+commit `ccb1b58` 推送。216/216 绿。
+
+---
+
+## 👤 用户 [19:30:12]
+
+1. IProtocolFacade 自注册 为什么需要自己注册?
+
+---
+
+## 🤖 助手 [19:30:50]
+
+**核心原因**:Program.cs 不再需要知道"存在哪些协议"。不自注册的话 Program.cs 得显式写每个协议的 DI + 路由;自注册后 Program.cs 只知道 facade 数组,遍历调 `RegisterServices` + `MapEndpoints`。
+
+**解锁**:
+- Feature flag:`if (cfg.SamlEnabled) facades.Add(new SamlFacade())`
+- 多协议共存:刷卡 Imprivata / 医生浏览器 SAML / App OIDC 共享 IdpCore
+- 删协议零伤害:注释一行,整条协议连带 DI + scheme 干净消失
+
+**代价**:多一层抽象,对只有 2 个 Facade 的现状净行数不省多少 —— 收益是未来的。
+
+问用户是否做。
+
+---
+
+## 👤 用户 [19:35:18]
+
+现在做(形式清零,成本不大)
+
+---
+
+## 🤖 助手 [19:35:45]
+
+**工具调用**:
+- [Write: Facades/Contracts/IProtocolFacade.cs(Name + RegisterServices + MapEndpoints)]
+- [Write: Facades/Imprivata/ImprivataFacade.cs(OStick scheme + AuthUser/Servers/Domains/Modalities + 501 通配)]
+- [Write: Facades/Admin/AdminFacade.cs(Admin scheme + Controllers)]
+- [Write: Program.cs 重写 — facade 数组 + foreach RegisterServices/MapEndpoints]
+
+Program.cs 瘦身 ~40 行。commit `d2a0e08` 推送。216 绿。
+
+---
+
+## 👤 用户 [19:45:22]
+
+ILockoutPolicy 抽出
+
+---
+
+## 🤖 助手 [19:45:48]
+
+**工具调用**:
+- [Write: IdpCore/Authentication/Contracts/ILockoutPolicy.cs(CheckAsync/OnSuccessAsync/OnFailureAsync + PwdOrPin enum + LockoutStatus record)]
+- [Write: IdpCore/Authentication/LockoutPolicy.cs(读 AuthPolicyConfig,组合 repo,幂等 OnSuccess)]
+- [Write: Sources/Contracts/ILockoutRepo.cs(ReadAsync/WriteAsync + LockoutState record)]
+- [Write: Sources/Local/EfLockoutRepo.cs(EF 读写 User.Pwd/PinFailCount/LockedUntil)]
+- [Write: PwdAuthenticator.cs 重构 — 注入 ILockoutPolicy,替换 `IsCurrentlyLocked(user)` 内联检查 + 3 处 `_users.RecordPwd*` 调用]
+- [Write: PinAuthenticator.cs 同上]
+- [Edit: IUserStore.cs 删 4 方法 RecordPwdSuccess/Failure/PinSuccess/Failure,UserStore.cs 同步删]
+- [Edit: Program.cs +2 DI]
+- [Edit: 2 测试 fixture 注入 LockoutPolicy]
+
+**注**:`UserStore.UnlockUserAsync`(Admin 手动解锁)保留 —— 它是管理员 action 不是 auth 事件。
+
+commit `1f81ea0` 推送。216 绿。
+
+---
+
+## 👤 用户 [20:00:05]
+
+(Phase γ)ArchUnitNET 先做
+
+---
+
+## 🤖 助手 [20:00:30]
+
+**工具调用**:
+- [Bash: dotnet add package TngTech.ArchUnitNET.xUnit 0.13.3]
+- [Write: tests/Architecture/LayeringTests.cs — 10 条架构规则]
+- [Edit: PwdOrPin 搬到 Shared/Contracts/(修 ILockoutPolicy 带入的隐性 §8.3 —— Sources.Contracts.ILockoutRepo using IdpCore.Authentication)]
+
+**10 条规则**:§8.1 × 3(Facade ↛ AppDbContext/Ef*Repo/LdapClient)+ §8.2 × 3(IdpCore ↛ AppDbContext/IHttpContextAccessor/System.Xml.Linq)+ §8.3 × 2(Sources ↛ IdpCore/Facades)+ §8.4 × 2(IdpCore/Sources ↛ IConfiguration)。
+
+全绿。226/226 tests(216 + 10)。commit `11a6ff5` 推送。
+
+---
+
+## 👤 用户 [20:15:18]
+
+§4 泛型 IAuthenticator<TInput> ❌ 剩余 + §4 泛型 ITokenIssuer<TToken> ❌ 剩余 为什么需要做泛型?代码可读性是不是不好了?
+
+---
+
+## 🤖 助手 [20:15:45]
+
+[EnterPlanMode] 诚实评估(不假设要做):
+
+**理论收益**:多 modality 统一签名 / 多 token 类型 / 编译期类型安全 / Dispatcher 抽象
+
+**对本项目能否兑现**:❌ 全部不能
+- `plan.md §1.3` 锁死 3 种 modality,没有第 4 种
+- `ADR-0001` 放弃 SAML,只 OStick JWT 一种 token
+- 只 3 处调用点(AuthUserEndpoint switch),无需抽象
+
+**可读性代价**:
+- `IPwdAuthenticator` → `IAuthenticator<PwdInput>` 命名抽象
+- 调用点从 1 行变 3 行(+AuthRequestContext + PwdInput record)
+- 堆栈多泛型参数;新人 onboarding 多跳
+
+**推荐 Option A:不做,改 ADR 标 Deferred**(Consciously Deferred 而非 technical debt)。
+
+---
+
+## 👤 用户 [20:20:22]
+
+A. 不做,改 ADR 注明 Deferred(推荐)
+
+---
+
+## 🤖 助手 [20:20:50]
+
+**工具调用**(纯文档修订,零代码改动):
+- [Edit: adr-0002-idp-architecture.md §附录 B 状态卡片全量刷新(过时 ❌ 改 ✅ 因为都做了);2 条泛型标 ⏸️ Deferred;新增 "Deferred 项说明" 小节 + 回顾触发条件]
+- [Edit: adr-0002-phase-ab-implementation.md "下一步" 改 "后续推进状态",7 项全标 ✅,2 条泛型放 "有意延期 ⏸️" 小节]
+- [Edit: CHANGELOG.md 原单个 Deferred 拆成 `Resolved`(已修)和 `Consciously Deferred`(显式决策)]
+
+触发条件:出现第 4 种 modality,或引入 SAML/OIDC Facade 要非 JWT token 格式。
+
+commit `6b1adb5` 推送。
+
+---
+
+## 👤 用户 [20:35:08]
+
+根据修改的内容更新 adr-0002-phase-ab-implementation.md 文档,同时把对应的 commit hash 也加上
+
+---
+
+## 🤖 助手 [20:35:30]
+
+**工具调用**:
+- [Bash: git log --oneline — 13 commits]
+- [Edit: adr-0002-phase-ab-implementation.md 头部 + "成就一览" 大重写]
+
+**改动**:
+- 文档头状态行:226/226 + 11 实现/2 有意延期 + GitHub 链接
+- 新增 "成就一览":4 初始 commits 表 + 9 后续 commits 表 + §4 契约逐条溯源 + §8 反模式 commit map
+- "后续推进状态" 改写 "后续推进明细" —— 9 个带 hash 标题的 block,每个含背景/做了什么/ADR 意图/验证
+- 清理 "⚠️ 已知遗留" 表(全部过时)和 "§4 5/11" 旧数据
+
+38 处 commit hash 回链。502 行。commit `4fcfe0a` 推送。
+
+---
+
+## 👤 用户 [20:45:22]
+
+把刚才讨论的内容加入 session_conversation.md,格式参考这个文档以前的格式。先读一遍这份文档,比对今天讨论的内容,把缺少的加进去
+
+---
+
+## 🤖 助手 [20:45:50]
+
+**工具调用**:
+- [Bash: tail session_conversation.md — 定位到 14:05 结尾]
+- [Edit: 追加从 14:15 开始的全部缺失内容,~22 个 Q&A pair]
+
+本轮内容归档总览:
+
+| 时段 | 阶段 | 关键产出 / commit |
+|------|------|------------------|
+| 14:15-14:55 | SAML vs LDAP 澄清 + Imprivata 当 IdP 的视角 | — |
+| 14:55-15:10 | ADR-0002 起草(23.5KB / 13 节)| — |
+| 15:10 | 文件重命名 adr-0001-adsync-vs-saml.md | — |
+| 15:25-15:56 | UML Sequence + Flowchart(puml, ADR-0002 版本) | — |
+| 16:15-17:00 | Phase α + β 保守版 4-stage 执行 | `9d4a730` 前所有本地修改 |
+| 17:00-17:30 | Phase 结果评估 + §8.2/§8.3 承认遗留 + plan 风险表澄清 | — |
+| 17:30-17:45 | 固化文档:CHANGELOG + ADR §附录 B + 实施记录 | `d752548` |
+| 17:45-18:15 | 初次 git init + 4-commit push + SSH 密钥搭建 | `b8e4309` .. `d752548` |
+| 18:30-19:00 | §5 Contracts + §8.3 + §8.2(初步)3 个 commit | `9d4a730` / `9bb87ec` / `fd1e155` |
+| 19:00-19:15 | §8.2 收尾 AuthSession + TicketBlacklist | `c48f325` |
+| 19:15-19:30 | IAuditSink 重命名 | `ccb1b58` |
+| 19:30-19:45 | IProtocolFacade 自注册 + 为什么需要的讨论 | `d2a0e08` |
+| 19:45-20:00 | ILockoutPolicy 抽出 | `1f81ea0` |
+| 20:00-20:15 | Phase γ ArchUnitNET 10 条规则 | `11a6ff5` |
+| 20:15-20:35 | 泛型契约评估 + Deferred 决策 | `6b1adb5` |
+| 20:35-20:45 | adr-0002-phase-ab-implementation 加 38 处 commit hash | `4fcfe0a` |
+| 20:45 | 本次 session_conversation 归档 | (本轮) |
+
+**本轮核心架构成就**(13 commits 从空仓到 ADR-0002 阶段达标):
+
+1. **§5 目录结构完整**:每层 Contracts/ 子目录齐全
+2. **§8 反模式零违规**:§8.1/§8.2/§8.3/§8.4 全部消除,10 条 ArchUnit 规则持续保护
+3. **§4 契约 11 实现 / 2 有意延期**:
+   - 实现:IUserStore + IRemotePasswordVerifier + IUserDirectorySync + IPasswordHasher + IAuthSessionStore(+Repo) + ITicketBlacklist(+Repo) + IAuditSink(+Store) + IClientContextProvider + IProtocolFacade + ILockoutPolicy(+Repo)
+   - 延期:泛型 IAuthenticator<T> / ITokenIssuer<T>(决策依据:项目锁死 3 modality + 1 token 格式,可读性代价 > 理论收益)
+4. **Phase γ**:ArchUnitNET 10 条架构规则 + 226/226 tests 全绿
+5. **三层文档闭环**:CHANGELOG(外部)+ ADR §附录 B(评审)+ 实施记录(详细过程 + 38 处 commit hash)
+
+**GitHub 主线**:`github.com/shamexln/ldap` main @ `4fcfe0a` → 下一次会是本次 session_conversation 归档的 commit。
