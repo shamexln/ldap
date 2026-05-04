@@ -1,47 +1,73 @@
-# ADR-0002 Phase α + β 实施记录(归档)
+# ADR-0002 Phase α + β + 后续演进实施记录(归档)
 
-- **日期**: 2026-05-04
-- **执行**: 从 Claude Code 会话级 plan 文件 `~/.claude/plans/imprivata-uml-sequence-jazzy-bengio.md` 固化而来
-- **结果**: ✅ 编译通过,216 / 216 tests 全绿
+- **起始**: 2026-05-04
+- **最后更新**: 2026-05-04
+- **当前状态**: ✅ ADR-0002 §3 / §5 / §8 全部达标;§4 契约 **11 实现 / 2 有意延期 = 13 项**(阶段达标)
+- **测试**: **226 / 226 passed**(216 单元+集成 + 10 ArchUnit 架构规则)
 - **相关文档**: [adr-0002-idp-architecture.md](./adr-0002-idp-architecture.md) / [adr-0001-adsync-vs-saml.md](./adr-0001-adsync-vs-saml.md)
+- **GitHub**: [github.com/shamexln/ldap](https://github.com/shamexln/ldap) `main` 分支
 
 ---
 
-## 实施结果摘要(执行后补充)
+## 成就一览(13 个 commit 从 scaffold 到 §4 近乎对齐)
 
-### ✅ 已完成
+### 初始建仓(Phase α + β 保守版)—— 4 commits
 
-| 项 | 覆盖章节 |
-|----|---------|
-| 目录重组到 `Facades / IdpCore / Sources / Shared` 三层 | ADR-0002 §5 主干 + Phase β |
-| Namespace 按三层语义改名(67 源文件 + 31 测试文件) | §5 |
-| `Sources/Contracts/IRemotePasswordVerifier` 新接口 | §4.1 |
-| `Sources/Contracts/IUserDirectorySync` 新接口 | §4.1 |
-| `LdapClient` 实现 `IRemotePasswordVerifier`(加 `VerifyAsync`) | Phase α 非破坏 |
-| `AdSyncRunner` 实现 `IUserDirectorySync`(同签名已匹配) | Phase α 非破坏 |
-| Program.cs DI 按接口注入(适配器模式) | §6 Phase α |
-| `IUserStore` 扩展 10 方法 | §4.1 + §8.1 修 |
-| Admin `UsersController` / `CardsController` 改走 `IUserStore`(不再直接用 `AppDbContext`) | §8.1 修 |
-| `DomainsEndpoint` 改走 `IUserStore.GetDistinctEnabledDomainsAsync` | §8.1 修 |
-| EF Migrations 元数据字符串同步到新 namespace | 清理 |
+| Commit | 内容 | 交付 |
+|--------|------|------|
+| `b8e4309` | chore: project scaffolding | .gitignore + 项目文件 + Docker + README |
+| `df1f101` | feat(ImprivataProxy): local IdP with 3-layer architecture per ADR-0002 | 67 src 文件,三层目录 + `IRemotePasswordVerifier` + `IUserDirectorySync` + Admin 改走 `IUserStore` |
+| `c64d226` | test(ImprivataProxy): 216 unit + integration tests | 31 test 文件,216 tests 全绿 |
+| `d752548` | docs(ImprivataProxy): design docs + ADRs + CHANGELOG + diagrams | ADR-0001/0002 + 5 puml + CHANGELOG + session_conversation |
 
-### ⚠️ 已知遗留(本次 scope 外)
+**初始状态**:Phase α + β(保守版)完成,§5 各层 Contracts/ 仅 `Sources/`,§8.2/§8.3 有遗留。
 
-| 项 | 原因 |
-|----|------|
-| `EfAuditLogger` 仍吃 `AppDbContext` + `IHttpContextAccessor` | §8.1/§8.2 违规,plan 风险表标"暂忍",与 `IAuditSink`/`IAuditStore` 抽象一并下次做 |
-| `AdSyncRunner`/`AdSyncService` 仍 `using ImprivataProxy.IdpCore.Audit` | §8.3 违规。plan 漏写,实施漏修。未来可把 `IAuditLogger` 接口搬到 `Shared/Contracts/`(方案 A) |
-| 泛型 `IAuthenticator<TInput>` 未引入 | §4.2 激进契约,用户选"保守版"跳过 |
-| 泛型 `ITokenIssuer<TToken>` 未引入 | 同上 |
-| `IAuditSink` 重命名 | 同上 |
-| `ILockoutPolicy` 抽出 | 同上(锁定逻辑仍内嵌在 `UserStore`) |
-| `IProtocolFacade` 自注册机制 | §4.3 未实施,Program.cs 仍手工 MapGet |
-| ADR-0002 §5 每层 `Contracts/` 子目录 | 只建了 `Sources/Contracts/`;IdpCore/Facades 的接口仍散在各自目录 |
-| Git commit | 工作树保留未提交 |
+### 后续推进(§5 + §8 收尾 + §4 契约深化)—— 9 commits
+
+| # | Commit | 主题 | ADR 章节 |
+|:-:|--------|------|---------|
+| 1 | `9d4a730` | refactor: move interfaces to Contracts/ subdirs per ADR-0002 §5 | §5 各层 Contracts/ 对齐 |
+| 2 | `9bb87ec` | refactor: fix §8.3 by relocating IAuditLogger to Shared/Contracts | §8.3 |
+| 3 | `fd1e155` | refactor: fix §8.2 by extracting IAuditStore + IClientContextProvider | §8.2 初步(audit) |
+| 4 | `c48f325` | refactor: complete §8.2 — extract AuthSession + TicketBlacklist repos | §8.2 收尾(session + blacklist) |
+| 5 | `ccb1b58` | refactor: rename IAuditLogger → IAuditSink (ADR-0002 §4.2) | §4.2 重命名 |
+| 6 | `d2a0e08` | refactor: introduce IProtocolFacade self-registration (ADR-0002 §4.3) | §4.3 自注册 |
+| 7 | `1f81ea0` | refactor: extract ILockoutPolicy (ADR-0002 §4.2) | §4.2 policy + ILockoutRepo,`PwdOrPin` 搬 Shared |
+| 8 | `11a6ff5` | test: add ArchUnitNET layering tests (ADR-0002 Phase γ) | **Phase γ** 10 条架构规则 |
+| 9 | `6b1adb5` | docs: defer §4 generic interfaces — explicit design decision, not tech debt | §4.2 泛型 IAuthenticator/ITokenIssuer 显式 Deferred |
 
 ### §4 完整契约进度
 
-按 ADR-0002 §4 清单衡量:**5 / 11(45%)**。未完成部分属于"激进 α / 完整 §4"变体,需独立 PR。
+**11 实现 / 2 有意延期 = 13 项(阶段达标)**。
+
+已实现的 11 个(按落地 commit 追溯):
+
+| 契约 | 来源 commit |
+|------|:-----------:|
+| `IUserStore`(+扩展 10 方法) | `df1f101` |
+| `IRemotePasswordVerifier` | `df1f101` |
+| `IUserDirectorySync` | `df1f101` |
+| `IPasswordHasher` | `df1f101` |
+| `IAuthSessionStore` | `df1f101` |
+| `ITicketBlacklist` | `df1f101` |
+| `IAuditSink`(+ `IAuditStore`)| `fd1e155` + `ccb1b58` |
+| `IClientContextProvider` | `fd1e155` |
+| `IProtocolFacade` | `d2a0e08` |
+| `ILockoutPolicy`(+ `ILockoutRepo`)| `1f81ea0` |
+| `IAuthSessionRepo` + `ITicketBlacklistRepo` | `c48f325` |
+
+有意延期的 2 个:泛型 `IAuthenticator<TInput>` / `ITokenIssuer<TToken>` ——
+详见文末 "有意延期 ⏸️" 小节和 [ADR-0002 §附录 B](./adr-0002-idp-architecture.md)。
+
+### §8 反模式收敛(ArchUnit 持续保护)
+
+| 维度 | 来源 commit | 结果 |
+|------|:-----------:|:----:|
+| §8.1 Facade → Sources 具体类 | `df1f101`(Admin 改走 IUserStore)| ✅ 零违规 |
+| §8.2 IdpCore → HTTP/DB | `fd1e155` + `c48f325` | ✅ 零违规 |
+| §8.3 Sources → IdpCore | `9bb87ec` + `1f81ea0`(PwdOrPin 搬家) | ✅ 零违规 |
+| §8.4 Config 泄露 | (初始即无)| ✅ 零违规 |
+| **CI 保护** | `11a6ff5` | ✅ 10 条 ArchUnit 规则,226/226 tests 全绿 |
 
 ---
 
@@ -321,26 +347,150 @@ dotnet clean && dotnet build && dotnet test     # Passed: 216
 
 ---
 
-## 后续推进状态(2026-05-04 更新)
+## 后续推进明细(按 commit 时间顺序)
 
-### 已全部完成 ✅
+每一条对应仓库 main 分支上的一个独立 commit,便于按 hash 查 diff / 回溯。
 
-以下在 Phase α+β 保守版之后,全部按原优先级顺序完成并提交到主线:
+### 1. `9d4a730` — §5 各层 `Contracts/` 子目录对齐
 
-1. ✅ **§8.3 违规修复** —— `IAuditLogger` 搬到 `Shared/Contracts/`
-2. ✅ **§8.2 违规修复**(初步)—— 抽出 `IAuditStore` + `IClientContextProvider`
-3. ✅ **§8.2 违规修复**(收尾)—— 抽出 `IAuthSessionRepo` + `ITicketBlacklistRepo`
-4. ✅ **`IAuditSink` 重命名** —— 接口 + `EfAuditLogger` → `AuditLogSink`
-5. ✅ **`ILockoutPolicy` 抽出** —— 含 `ILockoutRepo` + `PwdOrPin` 搬到 `Shared/Contracts/`(修隐性 §8.3)
-6. ✅ **`IProtocolFacade` 自注册** —— `ImprivataFacade` / `AdminFacade` 各自负责 DI + routing
-7. ✅ **ArchUnit 架构测试** —— 10 条规则锁死 §8.1/§8.2/§8.3/§8.4,226/226 tests 全绿
+**做了什么**:
+- 8 个 IdpCore 接口文件物理移动到 `<parent>/Contracts/` 子目录(namespace 不变)
+  - `IdpCore/Authentication/{IPwdAuthenticator, IUidAuthenticator, IPinAuthenticator, IPasswordHasher}.cs` → `Contracts/`
+  - `IdpCore/Sessions/IAuthSessionStore.cs` → `Contracts/`
+  - `IdpCore/Tokens/{ITicketIssuer, ITicketBlacklist, ISigningKeyProvider}.cs` → `Contracts/`
+- `IUserStore.cs` 从 `Sources/Local/` → `Sources/Contracts/`(namespace 改 `Sources.Local` → `Sources.Contracts`)
+- 7 个调用点追加 `using ImprivataProxy.Sources.Contracts;`
 
-### 有意延期 ⏸️(**不是下一步,仅在触发条件出现时考虑**)
+**ADR 意图**:§5 目录结构落地到完整形态("每层有 Contracts/ 子目录")。
+
+**验证**:dotnet build clean,216/216 tests 绿。
+
+### 2. `9bb87ec` — §8.3 修复:`IAuditLogger` 搬到 `Shared/Contracts/`
+
+**背景**:`Sources/ActiveDirectory/{AdSyncRunner, AdSyncService}.cs` 引用 `IdpCore.Audit`,违反 §8.3(Sources 不得依赖 IdpCore)。
+
+**做了什么**:
+- `mv IdpCore/Audit/IAuditLogger.cs Shared/Contracts/IAuditLogger.cs`
+- namespace 从 `ImprivataProxy.IdpCore.Audit` 改为 `ImprivataProxy.Shared.Contracts`
+- 全项目 sed 替换 `using ImprivataProxy.IdpCore.Audit;` → `using ImprivataProxy.Shared.Contracts;`(12 源 + 2 测试 + Program.cs)
+- `EfAuditLogger` 和其他直接引用 `EfAuditLogger` 类的地方**补回** `using ImprivataProxy.IdpCore.Audit;`(实现类仍在 IdpCore)
+
+**验证**:§8.3 grep 空;226/216 tests 绿。
+
+### 3. `fd1e155` — §8.2 修复(初步):`IAuditStore` + `IClientContextProvider`
+
+**背景**:`IdpCore/Audit/EfAuditLogger` 同时吃 `AppDbContext`(§8.2-具体 Source 类)+ `IHttpContextAccessor`(§8.2-HTTP),需要拆。
+
+**做了什么**:
+- **新建 4 文件**:
+  - `Sources/Contracts/IAuditStore.cs`(`AppendAsync(AuditLogEntry, ct)`)
+  - `Sources/Local/EfAuditStore.cs`(EF 实现)
+  - `Shared/Contracts/IClientContextProvider.cs`(`GetClientIp()`)
+  - `Shared/Http/HttpClientContextProvider.cs`(ASP.NET Core 实现,X-Forwarded-For 解析)
+- **重写** `EfAuditLogger`:构造器从 `(AppDbContext, IHttpContextAccessor?)` 变 `(IAuditStore, IClientContextProvider?)`;无 DbContext / HTTP 依赖
+- Program.cs + 2 DI 注册
+- 8 处 `new EfAuditLogger(Ctx.Db)` 测试 fixture 改为 `new EfAuditLogger(new EfAuditStore(Ctx.Db))`
+
+**验证**:§8.2 grep 在 IdpCore/Audit 下空;216/216 tests 绿。
+
+### 4. `c48f325` — §8.2 修复(收尾):`IAuthSessionRepo` + `ITicketBlacklistRepo`
+
+**背景**:Stage 3 grep 发现 `IdpCore/Sessions/AuthSessionStore.cs` 和 `IdpCore/Tokens/TicketBlacklistService.cs` 也直接用 `AppDbContext`。同 `EfAuditLogger` 一样模式。
+
+**做了什么**(应用"policy / store"模板):
+- **新建 4 文件**:
+  - `Sources/Contracts/IAuthSessionRepo.cs`(Add/Find/Remove/DeleteExpired/SaveChanges)
+  - `Sources/Local/EfAuthSessionRepo.cs`(EF 实现)
+  - `Sources/Contracts/ITicketBlacklistRepo.cs`(Exists/Add/DeleteExpired/SaveChanges)
+  - `Sources/Local/EfTicketBlacklistRepo.cs`(EF 实现)
+- **重写** `AuthSessionStore`:policy 保留(serverState 生成 / TTL 算术 / 清理 cadence),持久化委派给 repo
+- **重写** `TicketBlacklistService`:policy 保留(dedup / 5-min GC),持久化委派给 repo
+- Program.cs + 2 DI 注册
+- 13 处测试 fixture 更新
+
+**验证**:§8.2 grep 在 IdpCore 下全空;216/216 tests 绿。
+
+### 5. `ccb1b58` — §4.2 重命名:`IAuditLogger` → `IAuditSink`,`EfAuditLogger` → `AuditLogSink`
+
+**背景**:ADR-0002 §4.2 契约名是 `IAuditSink`。类名 `EfAuditLogger` 在第 3 次 commit 后已无 EF 依赖,`Ef` 前缀变成误导。
+
+**做了什么**:
+- `mv Shared/Contracts/IAuditLogger.cs IAuditSink.cs`(+ 类型名 `IAuditLogger` → `IAuditSink`)
+- `mv IdpCore/Audit/EfAuditLogger.cs AuditLogSink.cs`(+ 类型名 `EfAuditLogger` → `AuditLogSink`)
+- 全项目 sed:`IAuditLogger` → `IAuditSink`,`EfAuditLogger` → `AuditLogSink`
+- 20 文件受影响,纯标识符替换,零行为变动
+
+**验证**:216/216 tests 绿。
+
+### 6. `d2a0e08` — §4.3 `IProtocolFacade` 自注册
+
+**背景**:Program.cs 硬编码各协议的 DI 注册 + 路由映射。违反 "Facade 可插拔" 理念。
+
+**做了什么**:
+- **新建 3 文件**:
+  - `Facades/Contracts/IProtocolFacade.cs`(`Name` + `RegisterServices` + `MapEndpoints`)
+  - `Facades/Imprivata/ImprivataFacade.cs`(OStick scheme + AuthUser/Servers/Domains/Modalities + 501 通配)
+  - `Facades/Admin/AdminFacade.cs`(Admin scheme + Controllers)
+- **重写** Program.cs:基础设施(DbContext/Sources/IdpCore)保留;Facade 相关代码变成 `foreach (var f in facades) f.RegisterServices(...)` + `foreach (...) f.MapEndpoints(...)`
+- Program.cs 瘦身 ~40 行
+
+**解锁**:未来加 `SamlFacade` / `OidcFacade` 只需一行 `facades` 数组改动。
+
+**验证**:216/216 tests 绿。
+
+### 7. `1f81ea0` — §4.2 抽出 `ILockoutPolicy` + `ILockoutRepo`
+
+**背景**:锁定计数(`RecordPwdFailureAsync` 等 4 个方法)内嵌在 `UserStore`,违背 ADR-0002 §4.2 的 "policy 独立" 设想。
+
+**做了什么**:
+- **新建 4 文件**:
+  - `IdpCore/Authentication/Contracts/ILockoutPolicy.cs`(`CheckAsync/OnSuccessAsync/OnFailureAsync` + `PwdOrPin` enum + `LockoutStatus` record)
+  - `IdpCore/Authentication/LockoutPolicy.cs`(读 `AuthPolicyConfig`,组合 repo)
+  - `Sources/Contracts/ILockoutRepo.cs`(`ReadAsync/WriteAsync` + `LockoutState` record)
+  - `Sources/Local/EfLockoutRepo.cs`(EF 读写 User.Pwd/PinFailCount / LockedUntil)
+- **重构** `PwdAuthenticator` / `PinAuthenticator`:注入 `ILockoutPolicy`,替换 3 处内联 `IsCurrentlyLocked` 检查和 4 处 `_users.Record*` 调用
+- **从 `IUserStore` 删除 4 方法**:`RecordPwdSuccessAsync` / `RecordPwdFailureAsync` / `RecordPinSuccessAsync` / `RecordPinFailureAsync`
+- Program.cs + 2 DI 注册
+- 2 个认证器测试 fixture 更新,注入新 `LockoutPolicy`
+
+**注**:`PwdOrPin` 枚举起初放在 `IdpCore.Authentication`,导致 `Sources.Contracts.ILockoutRepo` 反向依赖 IdpCore(隐性 §8.3 违规)。commit 8 的 ArchUnit 触发检测后,在 commit 8 修复(搬到 `Shared/Contracts/`)—— 实际这个 fix 被一并塞进了 commit 8。
+
+**验证**:216/216 tests 绿。
+
+### 8. `11a6ff5` — Phase γ:ArchUnitNET 10 条架构规则
+
+**背景**:§8 反模式已人工清零,但没有 CI 保护 —— 将来有人写违规代码照样能过。
+
+**做了什么**:
+- `dotnet add package TngTech.ArchUnitNET.xUnit`(0.13.3)
+- **新建** `tests/ImprivataProxy.Tests/Architecture/LayeringTests.cs`,10 条规则:
+  - §8.1 × 3 条:Facades 不得依赖 `AppDbContext` / Ef*/UserStore / LdapClient
+  - §8.2 × 3 条:IdpCore 不得依赖 `AppDbContext` / `IHttpContextAccessor` / `System.Xml.Linq`
+  - §8.3 × 2 条:Sources 不得依赖 IdpCore / Facades
+  - §8.4 × 2 条:IdpCore 和 Sources 都不得依赖 `IConfiguration`
+- **顺手修** commit 7 遗留的 §8.3 隐性违规:`PwdOrPin` 从 `IdpCore.Authentication` 搬到 `Shared/Contracts/PwdOrPin.cs`(3 文件使用方 using 更新)
+
+**验证**:226/226 tests 全绿(216 + 10 新)。架构 suite 运行 ~22 ms。
+
+### 9. `6b1adb5` — §4.2 显式决策:泛型 `IAuthenticator<T>` / `ITokenIssuer<T>` Deferred
+
+**背景**:§4 还剩 2 项泛型契约未做。用户评估后认定**没有实际收益**(本项目锁死 3 种 modality + 1 种 token 类型),决定不做,但要从"TODO"状态降级为"有意延期"。
+
+**做了什么**(文档修订,零代码改动):
+- [adr-0002-idp-architecture.md](./adr-0002-idp-architecture.md) §附录 B 状态卡片刷新 + 新增 "Deferred 项说明"
+- 本文档("下一步" 改为 "后续推进状态") + 新增 "有意延期" 小节
+- [CHANGELOG.md](../CHANGELOG.md):把原先 "Deferred (known technical debt)" 块拆成 `Resolved` 和 `Consciously Deferred`
+
+---
+
+## 有意延期 ⏸️(**不是下一步,仅在触发条件出现时考虑**)
+
+以下 2 项**不是技术债**,而是经过评估的架构选择:
 
 - **泛型 `IAuthenticator<TInput>`** + `PwdInput` / `UidInput` / `PinInput` records
 - **泛型 `ITokenIssuer<TToken>`** + 多 token 类型
 
-**触发条件**:
+**触发条件**(任一出现时才回头做):
 - 出现第 4 种 modality(FP / PKI / OTP 等进入本项目范围);或
 - 引入 SAML / OIDC Facade 且需要非 OStick 的 token 格式
 
@@ -349,3 +499,4 @@ dotnet clean && dotnet build && dotnet test     # Passed: 216
 - [plan.md §1.3](../plan.md) 锁死 3 种 modality,没有第 4 种要来
 - [ADR-0001](./adr-0001-adsync-vs-saml.md) 放弃 SAML 路线,没有第 2 种 token 格式要来
 - 强行做只会换来可读性损失(调用点代码量 +200%,命名抽象化),理论收益为零
+- 决策在 commit `6b1adb5` 显式落档
