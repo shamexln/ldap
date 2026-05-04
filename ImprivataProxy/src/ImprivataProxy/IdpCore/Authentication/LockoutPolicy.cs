@@ -1,4 +1,5 @@
 using ImprivataProxy.Configuration;
+using ImprivataProxy.Shared.Contracts;
 using ImprivataProxy.Sources.Contracts;
 using Microsoft.Extensions.Options;
 

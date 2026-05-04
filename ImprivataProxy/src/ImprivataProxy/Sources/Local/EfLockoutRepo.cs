@@ -1,4 +1,4 @@
-using ImprivataProxy.IdpCore.Authentication;
+using ImprivataProxy.Shared.Contracts;
 using ImprivataProxy.Sources.Contracts;
 using Microsoft.EntityFrameworkCore;
 

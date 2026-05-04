@@ -1,11 +1,6 @@
-namespace ImprivataProxy.IdpCore.Authentication;
+using ImprivataProxy.Shared.Contracts;
 
-/// <summary>Which credential the lockout applies to.</summary>
-public enum PwdOrPin
-{
-    Pwd,
-    Pin,
-}
+namespace ImprivataProxy.IdpCore.Authentication;
 
 /// <summary>Snapshot of a credential's lockout state at a point in time.</summary>
 public record LockoutStatus(bool IsLocked, DateTime? LockedUntil, int FailCount)
