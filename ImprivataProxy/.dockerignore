@@ -1,0 +1,49 @@
+# Keep the build context tight.
+**/bin/
+**/obj/
+**/publish/
+**/out/
+
+# Tests are not needed for the runtime image.
+tests/
+
+# IDE / editor state.
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Test outputs.
+**/TestResults/
+
+# Local dev data / artifacts.
+data/
+certs/
+logs/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.log
+
+# Git + Docker metadata itself.
+.git/
+.gitignore
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# Local env overrides — never baked into the image.
+.env
+.env.*
+!.env.example
+
+# Documentation & scratchpads (designdoc/plan live in the repo, not the image).
+designdoc/
+plan.md
+*.md
+
+# OS junk.
+.DS_Store
+Thumbs.db

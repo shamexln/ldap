@@ -1,0 +1,64 @@
+# docker-compose for ImprivataProxy.
+#
+# Required secrets (provide via .env, NOT committed):
+#   AD_SVC_PASSWORD   - AD service account password
+#   ADMIN_PASSWORD    - admin Basic-Auth password
+#
+# Override appsettings.json values with double-underscore env vars, e.g.:
+#   Ad__LdapUrl=ldaps://dc.corp.example.com:636
+#   Ad__BaseDn=OU=Users,DC=corp,DC=example,DC=com
+#   Ad__ServiceAccountDn=CN=svc-imprivata,OU=Service,DC=corp,DC=example,DC=com
+
+services:
+  imprivata-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: imprivata-proxy:latest
+    container_name: imprivata-proxy
+    restart: unless-stopped
+
+    ports:
+      - "${PROXY_HOST_PORT:-80}:8080"
+
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+
+      # --- Required secrets ---
+      AD_SVC_PASSWORD: ${AD_SVC_PASSWORD:?must be set, e.g. via .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?must be set, e.g. via .env}
+
+      # --- AD connection (override appsettings.json) ---
+      Ad__LdapUrl: ${AD_LDAP_URL:-ldaps://dc.corp.example.com:636}
+      Ad__BaseDn: ${AD_BASE_DN:-OU=Users,DC=corp,DC=example,DC=com}
+      Ad__ServiceAccountDn: ${AD_SERVICE_ACCOUNT_DN:-CN=svc-imprivata,OU=Service,DC=corp,DC=example,DC=com}
+      Ad__SyncIntervalMinutes: ${AD_SYNC_INTERVAL_MINUTES:-30}
+
+      # --- Ticket signing ---
+      Ticket__SigningKeyPath: /app/certs/ticket-signing.pem
+      Ticket__TtlHours: ${TICKET_TTL_HOURS:-8}
+
+      # --- Database ---
+      Database__ConnectionString: Data Source=/app/data/proxy.db
+
+    volumes:
+      - proxy-data:/app/data         # SQLite DB — MUST persist
+      - proxy-certs:/app/certs       # JWT signing PEM — should persist so tickets survive restart
+      - proxy-logs:/app/logs         # Serilog rolling files
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+    # Enterprise AD domain controllers often use a self-signed root CA.
+    # Mount a host-side CA bundle if LDAPS validation fails:
+    #   - /etc/ssl/corp-ca.crt:/usr/local/share/ca-certificates/corp-ca.crt:ro
+    # and add: `entrypoint: /bin/sh -c 'update-ca-certificates && dotnet ImprivataProxy.dll'`
+
+volumes:
+  proxy-data:
+  proxy-certs:
+  proxy-logs:

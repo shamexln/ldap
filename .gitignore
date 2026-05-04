@@ -1,0 +1,49 @@
+# ============================================================================
+# c:/project/LDAP — .gitignore
+# ============================================================================
+
+# --- User-requested exclusions (non-negotiable) ----------------------------
+# Claude Code + JetBrains IDE configs and AI-instruction files live outside
+# the committed source of truth.
+.claude/
+.idea/
+CLAUDE.md
+AGENTS.md
+
+# --- .NET build output -----------------------------------------------------
+bin/
+obj/
+*.user
+*.suo
+.vs/
+publish/
+out/
+
+# --- Runtime data / logs / secrets ----------------------------------------
+data/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+logs/
+*.log
+.env
+
+# --- Crypto & signing keys ------------------------------------------------
+*.pfx
+*.pem
+*.key
+*.p12
+*.cer
+
+# --- Docker scratch / backup files ----------------------------------------
+*.bak
+*.tmp
+*.swp
+*~
+
+# --- OS / editor metadata -------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+*.orig
