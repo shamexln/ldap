@@ -1,7 +1,8 @@
+using ImprivataProxy.Sources.Local;
 using ImprivataProxy.Sources.Local.Entities;
 using ImprivataProxy.Sources.ActiveDirectory;
 
-namespace ImprivataProxy.Sources.Local;
+namespace ImprivataProxy.Sources.Contracts;
 
 public interface IUserStore
 {

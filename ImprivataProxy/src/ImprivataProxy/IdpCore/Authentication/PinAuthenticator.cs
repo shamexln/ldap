@@ -1,3 +1,4 @@
+using ImprivataProxy.Sources.Contracts;
 using ImprivataProxy.Sources.Local;
 using ImprivataProxy.Sources.Local.Entities;
 using ImprivataProxy.IdpCore.Audit;

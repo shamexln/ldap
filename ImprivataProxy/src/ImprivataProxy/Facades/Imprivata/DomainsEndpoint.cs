@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using ImprivataProxy.Sources.Contracts;
 using ImprivataProxy.Sources.Local;
 
 namespace ImprivataProxy.Facades.Imprivata;

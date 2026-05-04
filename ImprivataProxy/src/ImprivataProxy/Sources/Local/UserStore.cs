@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ImprivataProxy.Sources.Contracts;
 using ImprivataProxy.Sources.ActiveDirectory;
 using Microsoft.EntityFrameworkCore;
 
