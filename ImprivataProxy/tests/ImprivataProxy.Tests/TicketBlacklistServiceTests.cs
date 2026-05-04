@@ -1,6 +1,7 @@
 using ImprivataProxy.Sources.Local.Entities;
 using ImprivataProxy.Tests.Helpers;
 using ImprivataProxy.IdpCore.Tokens;
+using ImprivataProxy.Sources.Local;
 using Microsoft.EntityFrameworkCore;
 
 namespace ImprivataProxy.Tests;
@@ -11,7 +12,7 @@ public class TicketBlacklistServiceTests
     public async Task Add_ThenIsBlacklisted_ReturnsTrue()
     {
         using var ctx = new TestDbContext();
-        var svc = new TicketBlacklistService(ctx.Db);
+        var svc = new TicketBlacklistService(new EfTicketBlacklistRepo(ctx.Db));
 
         await svc.AddAsync("jti-1", DateTime.UtcNow.AddHours(1), default);
 
@@ -23,7 +24,7 @@ public class TicketBlacklistServiceTests
     public async Task Add_IsIdempotent()
     {
         using var ctx = new TestDbContext();
-        var svc = new TicketBlacklistService(ctx.Db);
+        var svc = new TicketBlacklistService(new EfTicketBlacklistRepo(ctx.Db));
         var exp = DateTime.UtcNow.AddHours(1);
 
         await svc.AddAsync("jti-dup", exp, default);
@@ -37,7 +38,7 @@ public class TicketBlacklistServiceTests
     public async Task Add_CleansUpExpiredEntries()
     {
         using var ctx = new TestDbContext();
-        var svc = new TicketBlacklistService(ctx.Db);
+        var svc = new TicketBlacklistService(new EfTicketBlacklistRepo(ctx.Db));
 
         ctx.Db.TicketBlacklist.Add(new TicketBlacklistEntry
         {
@@ -59,7 +60,7 @@ public class TicketBlacklistServiceTests
     public async Task IsBlacklisted_EmptyJti_ReturnsFalse()
     {
         using var ctx = new TestDbContext();
-        var svc = new TicketBlacklistService(ctx.Db);
+        var svc = new TicketBlacklistService(new EfTicketBlacklistRepo(ctx.Db));
 
         Assert.False(await svc.IsBlacklistedAsync("", default));
     }
@@ -68,7 +69,7 @@ public class TicketBlacklistServiceTests
     public async Task Add_EmptyJti_NoRow()
     {
         using var ctx = new TestDbContext();
-        var svc = new TicketBlacklistService(ctx.Db);
+        var svc = new TicketBlacklistService(new EfTicketBlacklistRepo(ctx.Db));
 
         await svc.AddAsync("", DateTime.UtcNow.AddHours(1), default);
 

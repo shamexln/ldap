@@ -1,16 +1,21 @@
 using System.Security.Cryptography;
-using ImprivataProxy.Sources.Local;
 using ImprivataProxy.Shared.Contracts;
+using ImprivataProxy.Sources.Contracts;
 using ImprivataProxy.Sources.Local.Entities;
-using Microsoft.EntityFrameworkCore;
 
 namespace ImprivataProxy.IdpCore.Sessions;
 
+/// <summary>
+/// ADR-0002 §8.2 fix: IdpCore-level <em>policy</em> for multi-step auth sessions.
+/// Generates the opaque serverState (128-bit entropy), applies TTL, and triggers
+/// opportunistic cleanup. All persistence goes through <see cref="IAuthSessionRepo"/>
+/// so this class has no direct <c>AppDbContext</c> dependency.
+/// </summary>
 public class AuthSessionStore : IAuthSessionStore
 {
-    private readonly AppDbContext _db;
+    private readonly IAuthSessionRepo _repo;
 
-    public AuthSessionStore(AppDbContext db) => _db = db;
+    public AuthSessionStore(IAuthSessionRepo repo) => _repo = repo;
 
     public async Task<string> CreateAsync(
         string userId, string stage, string pendingModality,
@@ -20,7 +25,7 @@ public class AuthSessionStore : IAuthSessionStore
         var serverState = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
 
         var now = DateTime.UtcNow;
-        _db.AuthSessions.Add(new AuthSession
+        await _repo.AddAsync(new AuthSession
         {
             ServerState = serverState,
             UserId = userId,
@@ -28,24 +33,19 @@ public class AuthSessionStore : IAuthSessionStore
             PendingModality = pendingModality,
             CreatedAt = now,
             ExpiresAt = now + ttl,
-        });
+        }, ct);
 
         // Opportunistic cleanup: purge sessions that expired more than a minute ago.
-        var cutoff = now.AddMinutes(-1);
-        var expired = await _db.AuthSessions
-            .Where(s => s.ExpiresAt < cutoff)
-            .ToListAsync(ct);
-        if (expired.Count > 0) _db.AuthSessions.RemoveRange(expired);
+        await _repo.DeleteExpiredAsync(now.AddMinutes(-1), ct);
 
-        await _db.SaveChangesAsync(ct);
+        await _repo.SaveChangesAsync(ct);
         return serverState;
     }
 
     public async Task<AuthSession?> GetActiveAsync(string serverState, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(serverState)) return null;
-        var session = await _db.AuthSessions
-            .FirstOrDefaultAsync(s => s.ServerState == serverState, ct);
+        var session = await _repo.FindAsync(serverState, ct);
         if (session is null) return null;
         if (session.ExpiresAt <= DateTime.UtcNow) return null;
         return session;
@@ -54,10 +54,9 @@ public class AuthSessionStore : IAuthSessionStore
     public async Task DeleteAsync(string serverState, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(serverState)) return;
-        var session = await _db.AuthSessions
-            .FirstOrDefaultAsync(s => s.ServerState == serverState, ct);
+        var session = await _repo.FindAsync(serverState, ct);
         if (session is null) return;
-        _db.AuthSessions.Remove(session);
-        await _db.SaveChangesAsync(ct);
+        await _repo.RemoveAsync(session, ct);
+        await _repo.SaveChangesAsync(ct);
     }
 }

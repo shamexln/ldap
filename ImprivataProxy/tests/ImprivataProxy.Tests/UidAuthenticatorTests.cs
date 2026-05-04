@@ -27,7 +27,7 @@ public class UidAuthenticatorTests
         public Fixture()
         {
             Store = new UserStore(Ctx.Db);
-            Sessions = new AuthSessionStore(Ctx.Db);
+            Sessions = new AuthSessionStore(new EfAuthSessionRepo(Ctx.Db));
             Audit = new EfAuditLogger(new EfAuditStore(Ctx.Db));
             Auth = new UidAuthenticator(
                 Store, Sessions, Tickets, Audit,

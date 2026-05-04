@@ -29,7 +29,7 @@ public class PinAuthenticatorTests
         public Fixture(AuthPolicyConfig? policy = null)
         {
             Store = new UserStore(Ctx.Db);
-            Sessions = new AuthSessionStore(Ctx.Db);
+            Sessions = new AuthSessionStore(new EfAuthSessionRepo(Ctx.Db));
             Audit = new EfAuditLogger(new EfAuditStore(Ctx.Db));
             Policy = policy ?? new AuthPolicyConfig
             {

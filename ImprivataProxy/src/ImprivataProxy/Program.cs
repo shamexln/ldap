@@ -39,8 +39,11 @@ builder.Services.AddHttpContextAccessor();
 
 // Accounts
 builder.Services.AddScoped<IUserStore, UserStore>();
-// ADR-0002 §8.2 fix: audit split into store (DB) + logger (policy) + client context (HTTP).
+// ADR-0002 §8.2 fix: audit / sessions / ticket blacklist each split into
+// storage repo (Sources/Local, uses AppDbContext) and IdpCore-level policy.
 builder.Services.AddScoped<IAuditStore, EfAuditStore>();
+builder.Services.AddScoped<IAuthSessionRepo, EfAuthSessionRepo>();
+builder.Services.AddScoped<ITicketBlacklistRepo, EfTicketBlacklistRepo>();
 builder.Services.AddScoped<IClientContextProvider, HttpClientContextProvider>();
 builder.Services.AddScoped<IAuditLogger, EfAuditLogger>();
 

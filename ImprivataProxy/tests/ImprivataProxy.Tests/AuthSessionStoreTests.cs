@@ -1,5 +1,6 @@
 using ImprivataProxy.IdpCore.Authentication;
 using ImprivataProxy.IdpCore.Sessions;
+using ImprivataProxy.Sources.Local;
 using ImprivataProxy.Tests.Helpers;
 using Microsoft.EntityFrameworkCore;
 
@@ -11,7 +12,7 @@ public class AuthSessionStoreTests
     public async Task Create_ReturnsRandomServerState_PersistsRow()
     {
         using var ctx = new TestDbContext();
-        var store = new AuthSessionStore(ctx.Db);
+        var store = new AuthSessionStore(new EfAuthSessionRepo(ctx.Db));
 
         var s1 = await store.CreateAsync("u1", "uid_done", "PIN", TimeSpan.FromMinutes(1), default);
         var s2 = await store.CreateAsync("u1", "uid_done", "PIN", TimeSpan.FromMinutes(1), default);
@@ -25,7 +26,7 @@ public class AuthSessionStoreTests
     public async Task GetActive_ReturnsSession_WithinTtl()
     {
         using var ctx = new TestDbContext();
-        var store = new AuthSessionStore(ctx.Db);
+        var store = new AuthSessionStore(new EfAuthSessionRepo(ctx.Db));
         var state = await store.CreateAsync("u1", "uid_done", "PIN", TimeSpan.FromMinutes(1), default);
 
         var session = await store.GetActiveAsync(state, default);
@@ -39,7 +40,7 @@ public class AuthSessionStoreTests
     public async Task GetActive_Expired_ReturnsNull()
     {
         using var ctx = new TestDbContext();
-        var store = new AuthSessionStore(ctx.Db);
+        var store = new AuthSessionStore(new EfAuthSessionRepo(ctx.Db));
         var state = await store.CreateAsync("u1", "uid_done", "PIN", TimeSpan.FromMilliseconds(1), default);
 
         await Task.Delay(30);
@@ -52,7 +53,7 @@ public class AuthSessionStoreTests
     public async Task GetActive_UnknownState_ReturnsNull()
     {
         using var ctx = new TestDbContext();
-        var store = new AuthSessionStore(ctx.Db);
+        var store = new AuthSessionStore(new EfAuthSessionRepo(ctx.Db));
         Assert.Null(await store.GetActiveAsync("nope", default));
         Assert.Null(await store.GetActiveAsync("", default));
     }
@@ -61,7 +62,7 @@ public class AuthSessionStoreTests
     public async Task Delete_RemovesSession()
     {
         using var ctx = new TestDbContext();
-        var store = new AuthSessionStore(ctx.Db);
+        var store = new AuthSessionStore(new EfAuthSessionRepo(ctx.Db));
         var state = await store.CreateAsync("u1", "uid_done", "PIN", TimeSpan.FromMinutes(1), default);
 
         await store.DeleteAsync(state, default);
@@ -74,7 +75,7 @@ public class AuthSessionStoreTests
     public async Task Create_CleansUpExpiredSessions()
     {
         using var ctx = new TestDbContext();
-        var store = new AuthSessionStore(ctx.Db);
+        var store = new AuthSessionStore(new EfAuthSessionRepo(ctx.Db));
 
         // Seed a long-stale session directly.
         ctx.Db.AuthSessions.Add(new Sources.Local.Entities.AuthSession
