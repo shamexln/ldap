@@ -61,8 +61,9 @@ public class PwdAuthenticatorTests
                 PwdLockoutMinutes = 15,
                 PwdHashTtlDays = 7,
             };
+            var lockout = new LockoutPolicy(new EfLockoutRepo(Ctx.Db), Options.Create(Policy));
             Auth = new PwdAuthenticator(
-                Store, Ldap, Hasher, Tickets, Audit,
+                Store, Ldap, Hasher, lockout, Tickets, Audit,
                 Options.Create(Policy),
                 NullLogger<PwdAuthenticator>.Instance);
         }

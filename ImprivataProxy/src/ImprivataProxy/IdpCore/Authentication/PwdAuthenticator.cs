@@ -1,11 +1,10 @@
-using ImprivataProxy.Sources.Contracts;
-using ImprivataProxy.Sources.Local;
-using ImprivataProxy.Shared.Contracts;
-using ImprivataProxy.Sources.Local.Entities;
-using ImprivataProxy.Sources.ActiveDirectory;
 using ImprivataProxy.Configuration;
 using ImprivataProxy.Facades.Imprivata;
 using ImprivataProxy.IdpCore.Tokens;
+using ImprivataProxy.Shared.Contracts;
+using ImprivataProxy.Sources.ActiveDirectory;
+using ImprivataProxy.Sources.Contracts;
+using ImprivataProxy.Sources.Local.Entities;
 using Microsoft.Extensions.Options;
 
 namespace ImprivataProxy.IdpCore.Authentication;
@@ -15,6 +14,7 @@ public class PwdAuthenticator : IPwdAuthenticator
     private readonly IUserStore _users;
     private readonly ILdapClient _ldap;
     private readonly IPasswordHasher _hasher;
+    private readonly ILockoutPolicy _lockout;
     private readonly ITicketIssuer _tickets;
     private readonly IAuditSink _audit;
     private readonly AuthPolicyConfig _policy;
@@ -24,6 +24,7 @@ public class PwdAuthenticator : IPwdAuthenticator
         IUserStore users,
         ILdapClient ldap,
         IPasswordHasher hasher,
+        ILockoutPolicy lockout,
         ITicketIssuer tickets,
         IAuditSink audit,
         IOptions<AuthPolicyConfig> policy,
@@ -32,6 +33,7 @@ public class PwdAuthenticator : IPwdAuthenticator
         _users = users;
         _ldap = ldap;
         _hasher = hasher;
+        _lockout = lockout;
         _tickets = tickets;
         _audit = audit;
         _policy = policy.Value;
@@ -59,11 +61,12 @@ public class PwdAuthenticator : IPwdAuthenticator
             return new AuthResult.Failure(ReturnCodes.RtcInvalidCredentials, "invalid credentials");
         }
 
-        if (IsCurrentlyLocked(user))
+        var lockState = await _lockout.CheckAsync(user.Id, PwdOrPin.Pwd, ct);
+        if (lockState.IsLocked)
         {
             await _audit.LogAsync("pwd_login_fail",
                 username: username, domain: domain,
-                detail: new { reason = "locked", until = user.PwdLockedUntil }, ct: ct);
+                detail: new { reason = "locked", until = lockState.LockedUntil }, ct: ct);
             return new AuthResult.Failure(ReturnCodes.RtcAccountLocked, "account locked");
         }
 
@@ -79,13 +82,12 @@ public class PwdAuthenticator : IPwdAuthenticator
         {
             // AD-linked users always have a DN from sync; missing means misconfig or non-AD user.
             _logger.LogWarning("User {Id} has no ad_distinguished_name; cannot bind-fallback", user.Id);
-            var locked = await _users.RecordPwdFailureAsync(user.Id,
-                _policy.PwdMaxFails, TimeSpan.FromMinutes(_policy.PwdLockoutMinutes), ct);
+            var after = await _lockout.OnFailureAsync(user.Id, PwdOrPin.Pwd, ct);
             await _audit.LogAsync("pwd_login_fail",
                 username: username, domain: domain,
                 detail: new { reason = "no_dn_for_bind" }, ct: ct);
             return new AuthResult.Failure(
-                locked ? ReturnCodes.RtcAccountLocked : ReturnCodes.RtcInvalidCredentials,
+                after.IsLocked ? ReturnCodes.RtcAccountLocked : ReturnCodes.RtcInvalidCredentials,
                 "invalid credentials");
         }
 
@@ -105,13 +107,12 @@ public class PwdAuthenticator : IPwdAuthenticator
 
         if (!bindOk)
         {
-            var locked = await _users.RecordPwdFailureAsync(user.Id,
-                _policy.PwdMaxFails, TimeSpan.FromMinutes(_policy.PwdLockoutMinutes), ct);
+            var after = await _lockout.OnFailureAsync(user.Id, PwdOrPin.Pwd, ct);
             await _audit.LogAsync("pwd_login_fail",
                 username: username, domain: domain,
-                detail: new { reason = "bind_failed", justLocked = locked }, ct: ct);
+                detail: new { reason = "bind_failed", justLocked = after.IsLocked }, ct: ct);
             return new AuthResult.Failure(
-                locked ? ReturnCodes.RtcAccountLocked : ReturnCodes.RtcInvalidCredentials,
+                after.IsLocked ? ReturnCodes.RtcAccountLocked : ReturnCodes.RtcInvalidCredentials,
                 "invalid credentials");
         }
 
@@ -129,7 +130,7 @@ public class PwdAuthenticator : IPwdAuthenticator
     private async Task<AuthResult> SucceedAsync(
         User user, string username, string domain, string path, CancellationToken ct)
     {
-        await _users.RecordPwdSuccessAsync(user.Id, ct);
+        await _lockout.OnSuccessAsync(user.Id, PwdOrPin.Pwd, ct);
         var ticket = _tickets.Issue(user);
         await _audit.LogAsync("pwd_login_ok",
             username: username, domain: domain,
@@ -145,7 +146,4 @@ public class PwdAuthenticator : IPwdAuthenticator
         var age = DateTime.UtcNow - user.PwdHashUpdatedAt.Value;
         return age <= TimeSpan.FromDays(_policy.PwdHashTtlDays);
     }
-
-    private static bool IsCurrentlyLocked(User user) =>
-        user.PwdLockedUntil is not null && user.PwdLockedUntil > DateTime.UtcNow;
 }

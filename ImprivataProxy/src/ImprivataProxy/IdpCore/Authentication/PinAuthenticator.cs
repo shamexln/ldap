@@ -1,11 +1,9 @@
-using ImprivataProxy.Sources.Contracts;
-using ImprivataProxy.Sources.Local;
-using ImprivataProxy.Sources.Local.Entities;
-using ImprivataProxy.Shared.Contracts;
-using ImprivataProxy.IdpCore.Sessions;
 using ImprivataProxy.Configuration;
 using ImprivataProxy.Facades.Imprivata;
+using ImprivataProxy.IdpCore.Sessions;
 using ImprivataProxy.IdpCore.Tokens;
+using ImprivataProxy.Shared.Contracts;
+using ImprivataProxy.Sources.Contracts;
 using Microsoft.Extensions.Options;
 
 namespace ImprivataProxy.IdpCore.Authentication;
@@ -15,6 +13,7 @@ public class PinAuthenticator : IPinAuthenticator
     private readonly IUserStore _users;
     private readonly IAuthSessionStore _sessions;
     private readonly IPasswordHasher _hasher;
+    private readonly ILockoutPolicy _lockout;
     private readonly ITicketIssuer _tickets;
     private readonly IAuditSink _audit;
     private readonly AuthPolicyConfig _policy;
@@ -24,6 +23,7 @@ public class PinAuthenticator : IPinAuthenticator
         IUserStore users,
         IAuthSessionStore sessions,
         IPasswordHasher hasher,
+        ILockoutPolicy lockout,
         ITicketIssuer tickets,
         IAuditSink audit,
         IOptions<AuthPolicyConfig> policy,
@@ -32,6 +32,7 @@ public class PinAuthenticator : IPinAuthenticator
         _users = users;
         _sessions = sessions;
         _hasher = hasher;
+        _lockout = lockout;
         _tickets = tickets;
         _audit = audit;
         _policy = policy.Value;
@@ -67,39 +68,33 @@ public class PinAuthenticator : IPinAuthenticator
             return new AuthResult.Failure(ReturnCodes.RtcInvalidCredentials, "invalid");
         }
 
-        if (IsCurrentlyLocked(user))
+        var lockState = await _lockout.CheckAsync(user.Id, PwdOrPin.Pin, ct);
+        if (lockState.IsLocked)
         {
             await _audit.LogAsync("pin_login_fail",
                 username: user.Username, domain: user.Domain,
-                detail: new { reason = "locked", until = user.PinLockedUntil }, ct: ct);
+                detail: new { reason = "locked", until = lockState.LockedUntil }, ct: ct);
             return new AuthResult.Failure(ReturnCodes.RtcAccountLocked, "account locked");
         }
 
         if (!_hasher.Verify(pin, user.PinHash!))
         {
-            var locked = await _users.RecordPinFailureAsync(
-                user.Id,
-                _policy.PinMaxFails,
-                TimeSpan.FromMinutes(_policy.PinLockoutMinutes),
-                ct);
+            var after = await _lockout.OnFailureAsync(user.Id, PwdOrPin.Pin, ct);
             await _audit.LogAsync("pin_login_fail",
                 username: user.Username, domain: user.Domain,
-                detail: new { reason = "pin_mismatch", justLocked = locked }, ct: ct);
+                detail: new { reason = "pin_mismatch", justLocked = after.IsLocked }, ct: ct);
             // Keep the session alive so the client can retry within TTL — UX decision.
             return new AuthResult.Failure(
-                locked ? ReturnCodes.RtcAccountLocked : ReturnCodes.RtcInvalidCredentials,
+                after.IsLocked ? ReturnCodes.RtcAccountLocked : ReturnCodes.RtcInvalidCredentials,
                 "invalid");
         }
 
         await _sessions.DeleteAsync(serverState, ct);
-        await _users.RecordPinSuccessAsync(user.Id, ct);
+        await _lockout.OnSuccessAsync(user.Id, PwdOrPin.Pin, ct);
 
         var ticket = _tickets.Issue(user);
         await _audit.LogAsync("pin_login_ok",
             username: user.Username, domain: user.Domain, ct: ct);
         return new AuthResult.Success(user, ticket);
     }
-
-    private static bool IsCurrentlyLocked(User user) =>
-        user.PinLockedUntil is not null && user.PinLockedUntil > DateTime.UtcNow;
 }

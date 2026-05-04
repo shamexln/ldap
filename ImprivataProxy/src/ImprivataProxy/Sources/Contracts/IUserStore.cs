@@ -31,18 +31,6 @@ public interface IUserStore
     Task UpdatePwdHashAsync(string userId, string pwdHash, CancellationToken ct);
 
     /// <summary>
-    /// Reset pwd_fail_count and pwd_locked_until after a successful login.
-    /// </summary>
-    Task RecordPwdSuccessAsync(string userId, CancellationToken ct);
-
-    /// <summary>
-    /// Increment pwd_fail_count. If it reaches maxFails, set pwd_locked_until = now + lockoutDuration.
-    /// Returns true if the account just got locked (to feed into return code choice).
-    /// </summary>
-    Task<bool> RecordPwdFailureAsync(
-        string userId, int maxFails, TimeSpan lockoutDuration, CancellationToken ct);
-
-    /// <summary>
     /// Look up a user via an enrolled card (by card_uid_hash). Returns null if:
     ///   - no such card,
     ///   - the card has been revoked,
@@ -54,16 +42,6 @@ public interface IUserStore
 
     /// <summary>Fetch a user by id (no status filtering — for internal session → user lookup).</summary>
     Task<User?> FindByIdAsync(string userId, CancellationToken ct);
-
-    /// <summary>Reset pin_fail_count and pin_locked_until after a successful PIN verification.</summary>
-    Task RecordPinSuccessAsync(string userId, CancellationToken ct);
-
-    /// <summary>
-    /// Increment pin_fail_count; if it reaches maxFails, set pin_locked_until = now + duration.
-    /// Returns true if the account just got locked.
-    /// </summary>
-    Task<bool> RecordPinFailureAsync(
-        string userId, int maxFails, TimeSpan lockoutDuration, CancellationToken ct);
 
     // ===== ADR-0002 §8.1 fix: Facade must not touch AppDbContext directly. =====
     // Admin controllers and DomainsEndpoint call these instead of EF LINQ on DbContext.

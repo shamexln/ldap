@@ -37,8 +37,9 @@ public class PinAuthenticatorTests
                 PinLockoutMinutes = 15,
                 AuthSessionTtlSeconds = 60,
             };
+            var lockout = new LockoutPolicy(new EfLockoutRepo(Ctx.Db), Options.Create(Policy));
             Auth = new PinAuthenticator(
-                Store, Sessions, Hasher, Tickets, Audit,
+                Store, Sessions, Hasher, lockout, Tickets, Audit,
                 Options.Create(Policy),
                 NullLogger<PinAuthenticator>.Instance);
         }

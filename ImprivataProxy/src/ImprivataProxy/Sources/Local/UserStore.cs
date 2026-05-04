@@ -123,35 +123,6 @@ public class UserStore : IUserStore
         await _db.SaveChangesAsync(ct);
     }
 
-    public async Task RecordPwdSuccessAsync(string userId, CancellationToken ct)
-    {
-        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
-        if (user is null) return;
-        if (user.PwdFailCount == 0 && user.PwdLockedUntil is null) return;
-        user.PwdFailCount = 0;
-        user.PwdLockedUntil = null;
-        user.UpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync(ct);
-    }
-
-    public async Task<bool> RecordPwdFailureAsync(
-        string userId, int maxFails, TimeSpan lockoutDuration, CancellationToken ct)
-    {
-        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
-        if (user is null) return false;
-
-        user.PwdFailCount++;
-        bool justLocked = false;
-        if (user.PwdFailCount >= maxFails)
-        {
-            user.PwdLockedUntil = DateTime.UtcNow + lockoutDuration;
-            justLocked = true;
-        }
-        user.UpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync(ct);
-        return justLocked;
-    }
-
     public Task<Entities.User?> FindByCardUidHashAsync(string cardUidHash, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(cardUidHash)) return Task.FromResult<Entities.User?>(null);
@@ -169,35 +140,6 @@ public class UserStore : IUserStore
     public Task<Entities.User?> FindByIdAsync(string userId, CancellationToken ct)
     {
         return _db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
-    }
-
-    public async Task RecordPinSuccessAsync(string userId, CancellationToken ct)
-    {
-        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
-        if (user is null) return;
-        if (user.PinFailCount == 0 && user.PinLockedUntil is null) return;
-        user.PinFailCount = 0;
-        user.PinLockedUntil = null;
-        user.UpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync(ct);
-    }
-
-    public async Task<bool> RecordPinFailureAsync(
-        string userId, int maxFails, TimeSpan lockoutDuration, CancellationToken ct)
-    {
-        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
-        if (user is null) return false;
-
-        user.PinFailCount++;
-        bool justLocked = false;
-        if (user.PinFailCount >= maxFails)
-        {
-            user.PinLockedUntil = DateTime.UtcNow + lockoutDuration;
-            justLocked = true;
-        }
-        user.UpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync(ct);
-        return justLocked;
     }
 
     // ===== ADR-0002 §8.1 fix: Admin + DomainsEndpoint data access moved here =====

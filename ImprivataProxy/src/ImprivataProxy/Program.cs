@@ -52,6 +52,7 @@ builder.Services.AddScoped<IUserStore, UserStore>();
 builder.Services.AddScoped<IAuditStore, EfAuditStore>();
 builder.Services.AddScoped<IAuthSessionRepo, EfAuthSessionRepo>();
 builder.Services.AddScoped<ITicketBlacklistRepo, EfTicketBlacklistRepo>();
+builder.Services.AddScoped<ILockoutRepo, EfLockoutRepo>();
 builder.Services.AddScoped<IClientContextProvider, HttpClientContextProvider>();
 
 builder.Services.AddSingleton<ILdapClient, LdapClient>();
@@ -69,6 +70,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<AdSyncService>());
 // ===================================================================
 builder.Services.AddScoped<IAuditSink, AuditLogSink>();
 builder.Services.AddSingleton<IPasswordHasher, PasswordHasher>();
+builder.Services.AddScoped<ILockoutPolicy, LockoutPolicy>();
 builder.Services.AddScoped<IAuthSessionStore, AuthSessionStore>();
 builder.Services.AddScoped<IPwdAuthenticator, PwdAuthenticator>();
 builder.Services.AddScoped<IUidAuthenticator, UidAuthenticator>();
