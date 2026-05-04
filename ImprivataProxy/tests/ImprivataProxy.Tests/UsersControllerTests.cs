@@ -22,7 +22,7 @@ public class UsersControllerTests
 
         public Fixture()
         {
-            Audit = new EfAuditLogger(Ctx.Db);
+            Audit = new EfAuditLogger(new EfAuditStore(Ctx.Db));
             Controller = new UsersController(new UserStore(Ctx.Db), Hasher, Audit);
         }
 

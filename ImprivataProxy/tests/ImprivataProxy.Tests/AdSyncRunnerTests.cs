@@ -56,7 +56,7 @@ public class AdSyncRunnerTests
         var bob = Guid.NewGuid();
         var ldap = new FakeLdap(new[] { MakeDto(alice, "alice"), MakeDto(bob, "bob") });
         var store = new UserStore(ctx.Db);
-        var audit = new EfAuditLogger(ctx.Db);
+        var audit = new EfAuditLogger(new EfAuditStore(ctx.Db));
         var runner = new AdSyncRunner(ldap, store, audit, NullLogger<AdSyncRunner>.Instance);
 
         var result = await runner.RunOnceAsync(default);
@@ -74,7 +74,7 @@ public class AdSyncRunnerTests
         var alice = Guid.NewGuid();
         var bob = Guid.NewGuid();
         var store = new UserStore(ctx.Db);
-        var audit = new EfAuditLogger(ctx.Db);
+        var audit = new EfAuditLogger(new EfAuditStore(ctx.Db));
 
         var ldap1 = new FakeLdap(new[] { MakeDto(alice, "alice"), MakeDto(bob, "bob") });
         await new AdSyncRunner(ldap1, store, audit, NullLogger<AdSyncRunner>.Instance)
@@ -97,7 +97,7 @@ public class AdSyncRunnerTests
         using var ctx = new TestDbContext();
         var alice = Guid.NewGuid();
         var store = new UserStore(ctx.Db);
-        var audit = new EfAuditLogger(ctx.Db);
+        var audit = new EfAuditLogger(new EfAuditStore(ctx.Db));
 
         await new AdSyncRunner(new FakeLdap(new[] { MakeDto(alice, "alice") }),
                 store, audit, NullLogger<AdSyncRunner>.Instance)
@@ -126,7 +126,7 @@ public class AdSyncRunnerTests
         using var ctx = new TestDbContext();
         var alice = Guid.NewGuid();
         var store = new UserStore(ctx.Db);
-        var audit = new EfAuditLogger(ctx.Db);
+        var audit = new EfAuditLogger(new EfAuditStore(ctx.Db));
 
         // Seed: alice exists and is enabled.
         await new AdSyncRunner(new FakeLdap(new[] { MakeDto(alice, "alice") }),
@@ -149,7 +149,7 @@ public class AdSyncRunnerTests
         using var ctx = new TestDbContext();
         var alice = Guid.NewGuid();
         var store = new UserStore(ctx.Db);
-        var audit = new EfAuditLogger(ctx.Db);
+        var audit = new EfAuditLogger(new EfAuditStore(ctx.Db));
 
         await new AdSyncRunner(new FakeLdap(new[] { MakeDto(alice, "alice", enabled: true) }),
                 store, audit, NullLogger<AdSyncRunner>.Instance)

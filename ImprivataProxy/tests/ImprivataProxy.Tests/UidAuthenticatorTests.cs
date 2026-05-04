@@ -28,7 +28,7 @@ public class UidAuthenticatorTests
         {
             Store = new UserStore(Ctx.Db);
             Sessions = new AuthSessionStore(Ctx.Db);
-            Audit = new EfAuditLogger(Ctx.Db);
+            Audit = new EfAuditLogger(new EfAuditStore(Ctx.Db));
             Auth = new UidAuthenticator(
                 Store, Sessions, Tickets, Audit,
                 Options.Create(new AuthPolicyConfig { AuthSessionTtlSeconds = 60 }),

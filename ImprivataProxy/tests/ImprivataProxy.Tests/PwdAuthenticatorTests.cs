@@ -54,7 +54,7 @@ public class PwdAuthenticatorTests
         {
             Ctx = new TestDbContext();
             Store = new UserStore(Ctx.Db);
-            Audit = new EfAuditLogger(Ctx.Db);
+            Audit = new EfAuditLogger(new EfAuditStore(Ctx.Db));
             Policy = policyOverride ?? new AuthPolicyConfig
             {
                 PwdMaxFails = 3,

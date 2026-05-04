@@ -21,7 +21,7 @@ public class CardsControllerTests
 
         public Fixture()
         {
-            Audit = new EfAuditLogger(Ctx.Db);
+            Audit = new EfAuditLogger(new EfAuditStore(Ctx.Db));
             Controller = new CardsController(new UserStore(Ctx.Db), Audit);
         }
 

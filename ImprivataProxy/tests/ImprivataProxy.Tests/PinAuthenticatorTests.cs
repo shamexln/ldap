@@ -30,7 +30,7 @@ public class PinAuthenticatorTests
         {
             Store = new UserStore(Ctx.Db);
             Sessions = new AuthSessionStore(Ctx.Db);
-            Audit = new EfAuditLogger(Ctx.Db);
+            Audit = new EfAuditLogger(new EfAuditStore(Ctx.Db));
             Policy = policy ?? new AuthPolicyConfig
             {
                 PinMaxFails = 3,

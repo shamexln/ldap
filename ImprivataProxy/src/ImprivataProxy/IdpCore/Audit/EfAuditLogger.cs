@@ -1,20 +1,24 @@
 using System.Text.Json;
 using ImprivataProxy.Shared.Contracts;
-using ImprivataProxy.Sources.Local;
+using ImprivataProxy.Sources.Contracts;
 using ImprivataProxy.Sources.Local.Entities;
-using Microsoft.AspNetCore.Http;
 
 namespace ImprivataProxy.IdpCore.Audit;
 
+/// <summary>
+/// Default <see cref="IAuditLogger"/>. Builds an <see cref="AuditLogEntry"/>
+/// from the call + ambient client context and hands it off to <see cref="IAuditStore"/>
+/// for persistence. No direct DbContext or HttpContext dependency —— see ADR-0002 §8.2.
+/// </summary>
 public class EfAuditLogger : IAuditLogger
 {
-    private readonly AppDbContext _db;
-    private readonly IHttpContextAccessor? _httpCtx;
+    private readonly IAuditStore _store;
+    private readonly IClientContextProvider? _clientCtx;
 
-    public EfAuditLogger(AppDbContext db, IHttpContextAccessor? httpCtx = null)
+    public EfAuditLogger(IAuditStore store, IClientContextProvider? clientCtx = null)
     {
-        _db = db;
-        _httpCtx = httpCtx;
+        _store = store;
+        _clientCtx = clientCtx;
     }
 
     public async Task LogAsync(
@@ -25,11 +29,10 @@ public class EfAuditLogger : IAuditLogger
         object? detail = null,
         CancellationToken ct = default)
     {
-        // Auto-resolve the caller IP when we weren't given one explicitly.
-        // Honors X-Forwarded-For (first entry) so we can log the real client behind a proxy.
-        clientIp ??= ResolveClientIp();
+        // Fall back to the ambient context (HTTP request, if any) when caller didn't supply one.
+        clientIp ??= _clientCtx?.GetClientIp();
 
-        _db.AuditLog.Add(new AuditLogEntry
+        await _store.AppendAsync(new AuditLogEntry
         {
             Timestamp = DateTime.UtcNow,
             Event = eventName,
@@ -37,21 +40,6 @@ public class EfAuditLogger : IAuditLogger
             Domain = domain,
             ClientIp = clientIp,
             Detail = detail is null ? null : JsonSerializer.Serialize(detail),
-        });
-        await _db.SaveChangesAsync(ct);
-    }
-
-    private string? ResolveClientIp()
-    {
-        var ctx = _httpCtx?.HttpContext;
-        if (ctx is null) return null;
-
-        if (ctx.Request.Headers.TryGetValue("X-Forwarded-For", out var xff) && xff.Count > 0)
-        {
-            var first = xff.ToString().Split(',', 2)[0].Trim();
-            if (!string.IsNullOrEmpty(first)) return first;
-        }
-
-        return ctx.Connection.RemoteIpAddress?.ToString();
+        }, ct);
     }
 }

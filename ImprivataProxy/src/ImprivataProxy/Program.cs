@@ -8,6 +8,7 @@ using ImprivataProxy.IdpCore.Authentication;
 using ImprivataProxy.IdpCore.Sessions;
 using ImprivataProxy.Configuration;
 using ImprivataProxy.Facades.Imprivata;
+using ImprivataProxy.Shared.Http;
 using ImprivataProxy.Shared.Logging;
 using ImprivataProxy.Middleware;
 using ImprivataProxy.IdpCore.Tokens;
@@ -38,6 +39,9 @@ builder.Services.AddHttpContextAccessor();
 
 // Accounts
 builder.Services.AddScoped<IUserStore, UserStore>();
+// ADR-0002 §8.2 fix: audit split into store (DB) + logger (policy) + client context (HTTP).
+builder.Services.AddScoped<IAuditStore, EfAuditStore>();
+builder.Services.AddScoped<IClientContextProvider, HttpClientContextProvider>();
 builder.Services.AddScoped<IAuditLogger, EfAuditLogger>();
 
 // Active Directory
