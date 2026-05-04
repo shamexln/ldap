@@ -1,0 +1,138 @@
+@startuml adr0002-authuser-flow
+!theme plain
+title ADR-0002 架构下 POST /AuthUser 流程 (Facade / IdpCore / Sources)
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam activity {
+  BackgroundColor #FAFAFA
+  BorderColor #666
+  DiamondBackgroundColor #FFFDE7
+  DiamondBorderColor #666
+}
+
+|#E8F4F8|Facade|
+start
+:**ImprivataXmlParser**\n.TryParseAuthUser(xml);
+:构造 typed Input\nPwdInput / UidInput / PinInput\n+ AuthRequestContext;
+:调用 IdpCore;
+
+|#FFF8E1|IdpCore|
+switch (modalityID?)
+case ( PWD )
+  partition "PwdAuthenticator\n**: IAuthenticator<PwdInput>**" {
+    |#E8F5E9|Sources|
+    :**IUserStore**\n.FindAsync(username, domain);
+    |#FFF8E1|IdpCore|
+    if (user == null ?) then (yes)
+      #LightPink:AuthResult\n(InvalidCredentials, Rtc=1001);
+      detach
+    endif
+    :**ILockoutPolicy**\n.CheckAsync(user.Id, Pwd);
+    if (Locked ?) then (yes)
+      #LightPink:AuthResult\n(LockedOut, Rtc=1010);
+      detach
+    endif
+    if (本地 hash 新鲜\n且 **IPasswordHasher**\n.Verify 命中 ?) then (yes — fastpath)
+      :ILockoutPolicy.OnSuccessAsync\n+ **IAuditSink**.LogAsync(pwd_ok, local);
+      #LightGreen:AuthResult(Success, Context);
+      detach
+    else (no — fallback)
+      |#E8F5E9|Sources|
+      :**IRemotePasswordVerifier**\n.VerifyAsync(id, password);
+      |#FFF8E1|IdpCore|
+      switch (RemoteVerifyOutcome ?)
+      case ( Valid )
+        :IPasswordHasher.Hash(password);
+        |#E8F5E9|Sources|
+        :IUserStore\n.UpdatePasswordHashAsync\n(透明缓存);
+        |#FFF8E1|IdpCore|
+        :ILockoutPolicy.OnSuccessAsync\n+ IAuditSink.LogAsync(pwd_ok, bind);
+        #LightGreen:AuthResult(Success, Context);
+      case ( Invalid )
+        :ILockoutPolicy.OnFailureAsync\n+ IAuditSink.LogAsync(pwd_fail);
+        #LightPink:AuthResult\n(InvalidCredentials, Rtc=1001);
+      case ( Unreachable )
+        :IAuditSink.LogAsync(pwd_unreachable);
+        #LightYellow:AuthResult\n(SourceUnreachable);
+      endswitch
+    endif
+  }
+case ( UID )
+  partition "UidAuthenticator\n**: IAuthenticator<UidInput>**" {
+    |#E8F5E9|Sources|
+    :IUserStore\n.FindByCardHashAsync\n(SHA-256(UniqueId));
+    |#FFF8E1|IdpCore|
+    if (user null 或\nrevoked/expired/disabled ?) then (yes)
+      :IAuditSink.LogAsync(uid_fail);
+      #LightPink:AuthResult\n(InvalidCredentials, Rtc=1001);
+      detach
+    endif
+    if (user.PinHash == null ?) then (yes — UID only)
+      :IAuditSink.LogAsync(uid_ok);
+      #LightGreen:AuthResult(Success, Context);
+    else (no — 需挑战 PIN)
+      :**IAuthSessionStore**\n.CreateAsync(user.Id,\npending="PIN", TTL=60s);
+      :IAuditSink.LogAsync\n(uid_pin_challenge);
+      #LightCyan:AuthResult(MultiStepRequired,\nServerState,\nNextChallenge=PIN);
+    endif
+  }
+case ( PIN )
+  partition "PinAuthenticator\n**: IAuthenticator<PinInput>**" {
+    :IAuthSessionStore\n.TakeAsync(serverState)\n**[一次性,取即删]**;
+    if (session null / expired ?) then (yes)
+      :IAuditSink.LogAsync(pin_fail, session);
+      #LightPink:AuthResult\n(SessionExpired, Rtc=1020);
+      detach
+    endif
+    |#E8F5E9|Sources|
+    :IUserStore.FindByIdAsync\n(session.UserId);
+    |#FFF8E1|IdpCore|
+    if (user disabled /\nPinHash null ?) then (yes)
+      :IAuditSink.LogAsync(pin_fail, user);
+      #LightPink:AuthResult\n(InvalidCredentials, Rtc=1001);
+      detach
+    endif
+    :ILockoutPolicy.CheckAsync(user.Id, Pin);
+    if (Locked ?) then (yes)
+      :IAuditSink.LogAsync(pin_fail, locked);
+      #LightPink:AuthResult\n(LockedOut, Rtc=1010);
+      detach
+    endif
+    :IPasswordHasher\n.Verify(pin, user.PinHash);
+    if (匹配 ?) then (yes)
+      :ILockoutPolicy.OnSuccessAsync\n+ IAuditSink.LogAsync(pin_ok);
+      #LightGreen:AuthResult(Success, Context);
+    else (no)
+      :ILockoutPolicy.OnFailureAsync\n+ IAuditSink.LogAsync(pin_fail);
+      #LightPink:AuthResult\n(InvalidCredentials, Rtc=1001);
+    endif
+  }
+endswitch
+
+|#E8F4F8|Facade|
+switch (AuthResult.Outcome ?)
+case ( Success )
+  :**ITokenIssuer<OStickTicket>**\n.Issue(AuthContext);
+  :**ImprivataXmlBuilder**\n.Success(modality, token);
+case ( MultiStepRequired )
+  :ImprivataXmlBuilder\n.Pending(ServerState,\nNextChallenge);
+case ( Failure\nInvalidCredentials / LockedOut /\nSessionExpired / SourceUnreachable )
+  :ImprivataXmlBuilder\n.Failure(modality, Rtc);
+endswitch
+:HTTP Response\n(text/xml);
+stop
+
+legend right
+  |= 泳道 |= 可访问的契约 |
+  | <back:#E8F4F8>Facade</back>  | 外部协议适配,XML 解析/构建,token 签发 |
+  | <back:#FFF8E1>IdpCore</back> | 认证逻辑,锁定,会话,审计,hash 验证 |
+  | <back:#E8F5E9>Sources</back> | IUserStore / IRemotePasswordVerifier |
+  \n
+  **反模式**(ADR-0002 §8):
+  Facade 不得跨到 Sources;
+  IdpCore 不得出现协议/XML;
+  Sources 不得知 Core/Facade。
+endlegend
+
+@enduml

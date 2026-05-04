@@ -1,0 +1,257 @@
+' ADR-0002 三层架构下的认证 Sequence 图
+' 包含 3 个 @startuml 块:PWD / UID / PIN
+' 所有 participant 用接口名(而非具体实现类),严格对齐 ADR-0002 §4 契约
+
+@startuml adr0002-seq-pwd
+!theme plain
+title PWD 认证 - ADR-0002 Facade / IdpCore / Sources
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+
+participant "Imprivata\nClient" as C
+
+box "Facades/Imprivata" #E8F4F8
+  participant "AuthUserEndpoint" as F
+  participant "ImprivataXmlParser" as XP
+  participant "ImprivataXmlBuilder" as XB
+end box
+
+box "IdpCore" #FFF8E1
+  participant "IAuthenticator\n<PwdInput>" as A
+  participant "ILockoutPolicy" as LP
+  participant "IPasswordHasher" as PH
+  participant "ITokenIssuer\n<OStickTicket>" as TI
+  participant "IAuditSink" as AU
+end box
+
+box "Sources" #E8F5E9
+  participant "IUserStore" as US
+  participant "IRemotePasswordVerifier" as RV
+end box
+
+C -> F : POST /AuthUser (PWD)\n<Username><Domain><Password>
+F -> XP : TryParseAuthUser(xml)
+XP --> F : ImprivataAuthRequest
+F -> F : 构造 PwdInput(user, domain, pwd)\n+ AuthRequestContext
+F -> A : AuthenticateAsync(input, ctx, ct)
+
+A -> US : FindAsync(username, domain)
+US --> A : User?
+
+opt user == null
+  A -> AU : LogAsync(pwd_fail, user_not_found)
+  A --> F : AuthResult\n(InvalidCredentials, Rtc=1001)
+end
+
+A -> LP : CheckAsync(user.Id, Pwd)
+LP --> A : LockoutStatus
+
+opt Locked
+  A -> AU : LogAsync(pwd_fail, locked)
+  A --> F : AuthResult(LockedOut, Rtc=1010)
+end
+
+alt 本地 hash 新鲜(TTL 未过)
+  A -> PH : Verify(pwd, user.PwdHash)
+  PH --> A : bool match
+  opt match (快速路径,不访问 AD)
+    A -> LP : OnSuccessAsync(user.Id, Pwd)
+    A -> AU : LogAsync(pwd_ok, path=local)
+    A --> F : AuthResult(Success, Context)
+  end
+end
+
+== 进入 fallback (hash 缺失 / TTL 过期 / 本地不匹配) ==
+
+A -> RV : VerifyAsync(UserIdentity, password, ct)
+RV --> A : RemoteVerifyResult
+
+alt Valid
+  A -> PH : Hash(password)
+  PH --> A : newHash (Argon2id)
+  A -> US : UpdatePasswordHashAsync\n(user.Id, newHash)
+  note right of A: 透明缓存 —\n下次登录走 fastpath
+  A -> LP : OnSuccessAsync(user.Id, Pwd)
+  A -> AU : LogAsync(pwd_ok, path=bind)
+  A --> F : AuthResult(Success, Context)
+else Invalid
+  A -> LP : OnFailureAsync(user.Id, Pwd)
+  note right of A: ≥5 次锁 15 min
+  A -> AU : LogAsync(pwd_fail, bind_failed)
+  A --> F : AuthResult\n(InvalidCredentials, Rtc=1001)
+else Unreachable
+  A -> AU : LogAsync(pwd_unreachable)
+  A --> F : AuthResult(SourceUnreachable)
+end
+
+== Facade 根据 Outcome 构建响应 ==
+
+alt AuthResult.Outcome == Success
+  F -> TI : Issue(result.Context)
+  TI --> F : OStickTicket (JWT)
+  F -> XB : Success(PWD, user, token)
+  XB --> F : XML\n<AuthState disp="0"/>\n<AuthTicket>...
+else 失败
+  F -> XB : Failure(PWD, result.Rtc)
+  XB --> F : XML\n<AuthState disp="4" rtc="..."/>
+end
+
+F --> C : 200 text/xml
+
+@enduml
+
+
+@startuml adr0002-seq-uid
+!theme plain
+title UID 认证(单步 / 挑战 PIN) - ADR-0002 Facade / IdpCore / Sources
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+
+participant "Imprivata\nClient" as C
+
+box "Facades/Imprivata" #E8F4F8
+  participant "AuthUserEndpoint" as F
+  participant "ImprivataXmlParser" as XP
+  participant "ImprivataXmlBuilder" as XB
+end box
+
+box "IdpCore" #FFF8E1
+  participant "IAuthenticator\n<UidInput>" as A
+  participant "IAuthSessionStore" as SS
+  participant "ITokenIssuer\n<OStickTicket>" as TI
+  participant "IAuditSink" as AU
+end box
+
+box "Sources" #E8F5E9
+  participant "IUserStore" as US
+end box
+
+C -> F : POST /AuthUser (UID)\n<UniqueID>
+F -> XP : TryParseAuthUser(xml)
+XP --> F : ImprivataAuthRequest
+F -> F : 构造 UidInput(uniqueId)
+F -> A : AuthenticateAsync(input, ctx, ct)
+
+A -> A : cardHash = SHA-256(uniqueId)
+A -> US : FindByCardHashAsync(cardHash)
+US --> A : User? (JOIN user_cards,\n过滤 revoked/expired/disabled)
+
+opt user == null
+  A -> AU : LogAsync(uid_fail)
+  A --> F : AuthResult\n(InvalidCredentials, Rtc=1001)
+end
+
+alt user.PinHash == null  **(UID only)**
+  A -> AU : LogAsync(uid_ok, path=uid_only)
+  A --> F : AuthResult(Success, Context)
+  F -> TI : Issue(Context)
+  TI --> F : OStickTicket
+  F -> XB : Success(UID, user, token)
+  XB --> F : XML\n<AuthState disp="0"/>\n<AuthTicket>...
+  F --> C : 200 text/xml
+
+else user.PinHash != null  **(需挑战 PIN)**
+  A -> SS : CreateAsync(user.Id,\npending="PIN", TTL=60s)
+  SS --> A : serverState (GUID)
+  A -> AU : LogAsync(uid_pin_challenge)
+  A --> F : AuthResult\n(MultiStepRequired,\nServerState,\nNextChallenge=PIN)
+
+  F -> XB : Pending(UID, serverState, "PIN")
+  XB --> F : XML\n<ServerState>...</ServerState>\n<AuthState disp="1" rtc="2"/>\n<RemainingAuthPolicy>\n  <AuthPolicyItem modalityID="PIN"/>
+  F --> C : 200 text/xml\n客户端将提示用户输 PIN,\n携 ServerState 再次请求
+end
+
+@enduml
+
+
+@startuml adr0002-seq-pin
+!theme plain
+title PIN 验证(UID+PIN 第 2 步) - ADR-0002 Facade / IdpCore / Sources
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+
+participant "Imprivata\nClient" as C
+
+box "Facades/Imprivata" #E8F4F8
+  participant "AuthUserEndpoint" as F
+  participant "ImprivataXmlParser" as XP
+  participant "ImprivataXmlBuilder" as XB
+end box
+
+box "IdpCore" #FFF8E1
+  participant "IAuthenticator\n<PinInput>" as A
+  participant "IAuthSessionStore" as SS
+  participant "ILockoutPolicy" as LP
+  participant "IPasswordHasher" as PH
+  participant "ITokenIssuer\n<OStickTicket>" as TI
+  participant "IAuditSink" as AU
+end box
+
+box "Sources" #E8F5E9
+  participant "IUserStore" as US
+end box
+
+C -> F : POST /AuthUser\n<ServerState><PIN>
+F -> XP : TryParseAuthUser(xml)
+XP --> F : ImprivataAuthRequest
+F -> F : 构造 PinInput(serverState, pin)
+F -> A : AuthenticateAsync(input, ctx, ct)
+
+A -> SS : TakeAsync(serverState)
+note right of SS: 一次性 —\n取到则 DELETE,\n不可重放
+SS --> A : AuthSession?
+
+opt session null / expired
+  A -> AU : LogAsync(pin_fail, session)
+  A --> F : AuthResult\n(SessionExpired, Rtc=1020)
+  F -> XB : Failure(PIN, 1020)
+  F --> C : 200 text/xml
+end
+
+A -> US : FindByIdAsync(session.UserId)
+US --> A : User?
+
+opt user disabled / PinHash null
+  A -> AU : LogAsync(pin_fail, user_disabled)
+  A --> F : AuthResult\n(InvalidCredentials, Rtc=1001)
+end
+
+A -> LP : CheckAsync(user.Id, Pin)
+LP --> A : LockoutStatus
+
+opt Locked
+  A -> AU : LogAsync(pin_fail, locked)
+  A --> F : AuthResult(LockedOut, Rtc=1010)
+end
+
+A -> PH : Verify(pin, user.PinHash)
+PH --> A : bool match
+
+alt match
+  A -> LP : OnSuccessAsync(user.Id, Pin)
+  A -> AU : LogAsync(pin_ok)
+  A --> F : AuthResult(Success, Context)
+
+  F -> TI : Issue(Context)
+  TI --> F : OStickTicket
+  F -> XB : Success(PIN, user, token)
+  XB --> F : XML\n<AuthState disp="0"/>\n<AuthTicket>...
+  F --> C : 200 text/xml
+else 不匹配
+  A -> LP : OnFailureAsync(user.Id, Pin)
+  note right of A: ≥3 次锁 15 min
+  A -> AU : LogAsync(pin_fail)
+  A --> F : AuthResult\n(InvalidCredentials, Rtc=1001)
+
+  F -> XB : Failure(PIN, 1001)
+  XB --> F : XML\n<AuthState disp="4" rtc="1001"/>
+  F --> C : 200 text/xml
+end
+
+@enduml

@@ -1,0 +1,180 @@
+@startuml pipeline
+!theme plain
+title PWD 认证流程 - 本地 argon2 + AD bind fallback
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+
+participant "Imprivata\nClient" as C
+participant "AuthUser\nEndpoint" as E
+participant "Pwd\nAuthenticator" as A
+database "users 表\n(SQLite)" as DB
+participant "Ldap\nClient" as L
+participant "Active\nDirectory" as AD
+participant "Ticket\nIssuer" as T
+
+C -> E : POST /AuthUser (PWD)\n<Username>, <Domain>, <Password>
+E -> A : Authenticate(user, domain, pwd)
+
+A -> DB : SELECT WHERE\nusername=? AND domain=?\nAND enabled=1
+DB --> A : user row
+
+alt 用户不存在 / 禁用
+  A --> E : Failure (disp=4, rtc=1001)
+else pwd_locked_until 未过
+  A --> E : Failure (disp=4, rtc=1010)
+
+else pwd_hash 存在且 TTL 未过
+  A -> A : argon2_verify(pwd, pwd_hash)
+  alt 本地命中
+    A -> T : IssueTicket(user)
+    T --> A : JWT
+    A --> E : Success + Ticket
+    note right: 快速路径,不触达 AD
+  else 本地未命中\n(密码可能在 AD 侧改过)
+    A -> L : bind(user_dn, pwd)
+    L -> AD : LDAPS simple bind
+    AD --> L : success
+    L --> A : ok
+    A -> DB : UPDATE pwd_hash =\nargon2(pwd)
+    A -> T : IssueTicket(user)
+    A --> E : Success + Ticket
+    note right: 透明刷新本地 hash
+  end
+
+else 首次登录 (pwd_hash = NULL)\n或 TTL 已过
+  A -> L : bind(user_dn, pwd)
+  L -> AD : LDAPS simple bind
+  alt bind 成功
+    AD --> L : success
+    A -> DB : UPDATE pwd_hash =\nargon2(pwd)
+    A -> T : IssueTicket(user)
+    A --> E : Success + Ticket
+    note right: Bootstrap / 刷新
+  else bind 失败
+    AD --> L : failure
+    A -> DB : pwd_fail_count++\n(≥5 锁 15 min)
+    A --> E : Failure (disp=4, rtc=1001)
+  end
+end
+
+E -> C : XML Response\n<AuthState disp="0"/>\n<AuthTicket>...</AuthTicket>
+
+@enduml
+
+@startuml uid-pin-flow
+!theme plain
+title UID + PIN 两步认证流程
+
+skinparam backgroundColor white
+skinparam shadowing false
+
+participant "Imprivata\nClient" as C
+participant "AuthUser\nEndpoint" as E
+participant "Uid\nAuthenticator" as U
+participant "Pin\nAuthenticator" as P
+database "SQLite\n(users + cards +\nauth_sessions)" as DB
+participant "Ticket\nIssuer" as T
+
+== 第 1 步: 刷卡 ==
+C -> E : POST /AuthUser (UID)\n<UniqueID>123456</UniqueID>
+E -> U : Authenticate(uid)
+U -> DB : SELECT u.*, u.pin_hash\nFROM user_cards c\nJOIN users u\nWHERE card_uid_hash=SHA256(uid)\nAND c.revoked=0\nAND u.enabled=1
+DB --> U : user + pin_hash(非 NULL)
+
+U -> DB : INSERT auth_sessions\n(server_state, user_id,\n stage='uid_done',\n pending='PIN',\n expires=now+60s)
+U --> E : Pending\n(server_state, require=PIN)
+E -> C : XML Response\n<ServerState>...</ServerState>\n<RemainingAuthPolicy>PIN</...>
+
+== 第 2 步: 输入 PIN ==
+C -> E : POST /AuthUser\n<ServerState>, <PIN>
+E -> P : VerifyPin(server_state, pin)
+P -> DB : SELECT auth_sessions\nWHERE server_state=?\nAND expires_at > now
+
+alt session 不存在 / 过期
+  P --> E : Failure (disp=4, rtc=1020)
+else pin_locked_until 未过
+  P --> E : Failure (disp=4, rtc=1010)
+else PIN 验证
+  P -> P : argon2_verify(pin, pin_hash)
+  alt PIN 错误
+    P -> DB : pin_fail_count++\n(≥3 锁 15 min)
+    P --> E : Failure (disp=4, rtc=1001)
+  else PIN 正确
+    P -> DB : DELETE auth_sessions\nWHERE server_state=?
+    P -> DB : UPDATE users SET\npin_fail_count=0
+    P -> T : IssueTicket(user)
+    T --> P : JWT
+    P --> E : Success + Ticket
+  end
+end
+
+E -> C : XML Response
+
+@enduml
+
+@startuml ad-sync-flow
+!theme plain
+title AD 周期同步流程
+
+skinparam backgroundColor white
+skinparam shadowing false
+
+participant "Background\nService\n(PeriodicTimer)" as Timer
+participant "AdSync\nService" as Svc
+participant "Ldap\nClient" as L
+participant "Active\nDirectory" as AD
+participant "User\nStore" as Store
+database "SQLite" as DB
+
+Timer -> Svc : 每 30 分钟触发\n(或 POST /admin/sync)
+Svc -> Svc : Semaphore.WaitAsync(0)\n(防重入)
+
+alt 已有实例在跑
+  Svc --> Timer : skip
+else 获取 lock
+  Svc -> L : OpenBound(LDAPS 636)
+  L -> AD : bind(serviceAccount, pwd)
+
+  alt bind 失败
+    AD --> L : error
+    L --> Svc : LdapException
+    Svc -> Store : audit("ad_sync_failed")
+    note right of Svc: **不扫尾禁用**
+  else bind 成功
+    AD --> L : bound
+    Svc -> Svc : seenGuids = {}
+
+    loop 分页循环 (page=1000)
+      L -> AD : SearchRequest\n(baseDn, subtree,\n filter=&(objectCategory=person)\n       (objectClass=user))\n+ PageResultControl
+      AD --> L : SearchResponse\n(1000 entries)
+
+      loop 每条 entry
+        L --> Svc : SearchResultEntry
+        Svc -> Svc : parseEntry:\nobjectGUID(byte[]) → Guid\nUAC → enabled\nmemberOf → groups
+        Svc -> Svc : seenGuids.add(guid)
+
+        Svc -> Store : UpsertFromAd(dto)
+        alt 新用户
+          Store -> DB : INSERT users\npwd_hash=NULL\npin_hash=NULL
+        else 已存在
+          Store -> DB : UPDATE username /\ndomain / dn / display /\nenabled / attributes\n(不动 pwd_hash /\n pin_hash / 锁定计数)
+        end
+      end
+
+      alt 还有下一页
+        Svc -> L : next page (cookie)
+      end
+    end
+
+    Svc -> Store : DisableUsersNotIn(seenGuids)
+    Store -> DB : UPDATE users\nSET enabled=0\nWHERE ad_object_guid NOT IN\nseenGuids
+
+    Svc -> Store : audit("ad_sync_completed",\nadded, updated, disabled)
+  end
+
+  Svc -> Svc : Semaphore.Release()
+end
+
+@enduml
