@@ -45,24 +45,38 @@
 
 - **[ADR-0002 §8.1](designdoc/adr-0002-idp-architecture.md)** Facade 直接访问 Sources 具体类型的违规:`UsersController` / `CardsController` / `DomainsEndpoint` 三处 `AppDbContext` 注入全部移除
 
-### Deferred (known technical debt)
+### Resolved (since first draft of this CHANGELOG)
 
-- **§8.2 违规**:[`IdpCore/Audit/EfAuditLogger`](src/ImprivataProxy/IdpCore/Audit/EfAuditLogger.cs) 仍依赖 `AppDbContext` + `IHttpContextAccessor`。需引入 `IAuditStore` + `IClientContextProvider` 抽象后解决
-- **§8.3 违规**:[`Sources/ActiveDirectory/AdSyncRunner`](src/ImprivataProxy/Sources/ActiveDirectory/AdSyncRunner.cs) + `AdSyncService` `using ImprivataProxy.IdpCore.Audit`。可通过把 `IAuditLogger` 接口搬到 `Shared/Contracts/` 解决(方案 A,~10 分钟)
-- **§4 完整契约** 未完成项(6/11):
-  - 泛型 `IAuthenticator<TInput>` + `PwdInput/UidInput/PinInput` records + `AuthRequestContext`
-  - 泛型 `ITokenIssuer<TToken>`
-  - `IAuditSink` 重命名(现仍为 `IAuditLogger`)
-  - `ILockoutPolicy` 从 `UserStore` 抽出
-  - `IProtocolFacade` 自注册机制
-  - 各层 `Contracts/` 子目录(目前仅 `Sources/Contracts/`)
-- **Phase γ**:ArchUnitNET 架构测试未引入
+后续 commits 已解决这些遗留项:
+
+- **§8.2 违规** —— `EfAuditLogger` / `AuthSessionStore` / `TicketBlacklistService` 全部抽出 `IXxxRepo`(Sources)+ policy(IdpCore),`IClientContextProvider` 承担 HTTP 抽象
+- **§8.3 违规** —— `IAuditLogger` 搬到 `Shared/Contracts/`;`PwdOrPin` 也搬到 `Shared/Contracts/`
+- **§4 部分契约**:`IAuditSink` 重命名、`ILockoutPolicy` 抽出、`IProtocolFacade` 自注册、各层 `Contracts/` 子目录——全部完成
+- **Phase γ ArchUnitNET** —— 10 条架构规则已上,`§8` 在 CI 被持续保护
+
+### Consciously Deferred (**not technical debt** — explicit design decisions)
+
+- **泛型 `IAuthenticator<TInput>` + `PwdInput/UidInput/PinInput` records**
+- **泛型 `ITokenIssuer<TToken>` + 多 token 类型**
+
+这两项**不是待办**,而是经过评估的架构选择:
+
+1. 本项目 [plan.md §1.3](plan.md) 明确锁定 3 种 modality(PWD / UID / UID+PIN),未来不会新增
+2. [ADR-0001](designdoc/adr-0001-adsync-vs-saml.md) 显式放弃 SAML,只有 OStick JWT 一种 token
+3. 泛型化**没有实际收益**(没有统一分派的多态需求),**却有可读性代价**(调用点代码量 +200%,命名抽象化)
+4. §8 架构正确性由 [ArchUnit 测试](tests/ImprivataProxy.Tests/Architecture/LayeringTests.cs) 持续保护
+
+**回顾触发条件**(未来满足任一则回头做):
+- 出现第 4 种 modality(FP / PKI / OTP 等进入本项目范围)
+- 引入 SAML / OIDC Facade 且需要非 OStick 的 token 格式
+
+详细论证见 [ADR-0002 §附录 B](designdoc/adr-0002-idp-architecture.md)。
 
 ### Verification
 
 - `dotnet clean && dotnet build` —— 0 warnings, 0 errors
-- `dotnet test` —— **216 / 216 passed, 0 failed**
-- 反模式 grep(ADR-0002 §8):§8.1 零违规;§8.2/§8.3 已知遗留如上
+- `dotnet test` —— **226 / 226 passed, 0 failed**(含 10 条 ArchUnit 架构规则)
+- 反模式 grep(ADR-0002 §8):§8.1 / §8.2 / §8.3 / §8.4 全部零违规
 
 ### Refs
 

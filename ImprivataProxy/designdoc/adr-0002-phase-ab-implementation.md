@@ -321,16 +321,31 @@ dotnet clean && dotnet build && dotnet test     # Passed: 216
 
 ---
 
-## 下一步(若希望推进到 §4 完整契约)
+## 后续推进状态(2026-05-04 更新)
 
-按优先级排序:
+### 已全部完成 ✅
 
-1. **§8.3 违规修复**(最小代价):把 `IAuditLogger.cs` 从 `IdpCore/Audit/` 搬到 `Shared/Contracts/`,仅约 10 处 using 更新。10 分钟
-2. **§8.2 违规修复**(中等代价):抽出 `IAuditStore`(Sources 层)+ `IClientContextProvider`(Facade 层),重写 `EfAuditLogger` 为纯编排。1-2 小时
-3. **`IAuditSink` 重命名**(中等代价):`IAuditLogger` → `IAuditSink`(+ 实现类 `EfAuditSink`),全项目约 30 处调用点改。30 分钟
-4. **`ILockoutPolicy` 抽出**(中等代价):把锁定计数逻辑从 `UserStore.RecordPwd/PinFailureAsync` 提取成独立接口。1 小时
-5. **泛型 `IAuthenticator<TInput>` / `ITokenIssuer<TToken>`**(大代价):引入 `PwdInput/UidInput/PinInput` records + 改签名 + 大量 mock 更新。2-4 小时
-6. **`IProtocolFacade` 自注册机制**(中等代价):改 Program.cs,让 `ImprivataFacade` / `AdminFacade` 类各自实现 `IProtocolFacade`,Program.cs 变成 `foreach (f in facades) f.MapEndpoints(app);` 模式。1 小时
-7. **ArchUnit 架构测试**(中等代价):加 `ArchUnitNET` NuGet + 写分层规则测试,在 CI 阻止回退。1-2 小时
+以下在 Phase α+β 保守版之后,全部按原优先级顺序完成并提交到主线:
 
-逐项推进,每项独立成 PR 便于评审。
+1. ✅ **§8.3 违规修复** —— `IAuditLogger` 搬到 `Shared/Contracts/`
+2. ✅ **§8.2 违规修复**(初步)—— 抽出 `IAuditStore` + `IClientContextProvider`
+3. ✅ **§8.2 违规修复**(收尾)—— 抽出 `IAuthSessionRepo` + `ITicketBlacklistRepo`
+4. ✅ **`IAuditSink` 重命名** —— 接口 + `EfAuditLogger` → `AuditLogSink`
+5. ✅ **`ILockoutPolicy` 抽出** —— 含 `ILockoutRepo` + `PwdOrPin` 搬到 `Shared/Contracts/`(修隐性 §8.3)
+6. ✅ **`IProtocolFacade` 自注册** —— `ImprivataFacade` / `AdminFacade` 各自负责 DI + routing
+7. ✅ **ArchUnit 架构测试** —— 10 条规则锁死 §8.1/§8.2/§8.3/§8.4,226/226 tests 全绿
+
+### 有意延期 ⏸️(**不是下一步,仅在触发条件出现时考虑**)
+
+- **泛型 `IAuthenticator<TInput>`** + `PwdInput` / `UidInput` / `PinInput` records
+- **泛型 `ITokenIssuer<TToken>`** + 多 token 类型
+
+**触发条件**:
+- 出现第 4 种 modality(FP / PKI / OTP 等进入本项目范围);或
+- 引入 SAML / OIDC Facade 且需要非 OStick 的 token 格式
+
+**决策依据**见 [ADR-0002 §附录 B "Deferred 项说明"](./adr-0002-idp-architecture.md)。简要:
+
+- [plan.md §1.3](../plan.md) 锁死 3 种 modality,没有第 4 种要来
+- [ADR-0001](./adr-0001-adsync-vs-saml.md) 放弃 SAML 路线,没有第 2 种 token 格式要来
+- 强行做只会换来可读性损失(调用点代码量 +200%,命名抽象化),理论收益为零

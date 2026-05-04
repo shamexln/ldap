@@ -629,37 +629,61 @@ app.Run();
 
 [项目根 CHANGELOG.md](../CHANGELOG.md) 也记录了本次变更的摘要。
 
-### 状态卡片
+### 状态卡片(2026-05-04 更新)
 
 | 维度 | 状态 | 备注 |
 |------|:----:|------|
-| 三层目录结构(Facades / IdpCore / Sources / Shared) | ✅ | §5 落地,但各层 `Contracts/` 子目录仅 `Sources/` 一处 |
+| 三层目录结构(Facades / IdpCore / Sources / Shared) | ✅ | §5 落地,各层 `Contracts/` 子目录齐全 |
 | Namespace 改名(67 源 + 31 测试) | ✅ | 无旧 namespace 残留 |
 | `IRemotePasswordVerifier` 契约 + 实现 | ✅ | `LdapClient` 实现,DI 就位 |
 | `IUserDirectorySync` 契约 + 实现 | ✅ | `AdSyncRunner` 实现,DI 就位 |
 | `IUserStore` 扩展(Admin + Discovery 所需 10 方法) | ✅ | |
 | Admin 控制器改走 `IUserStore`(§8.1 修) | ✅ | `UsersController` / `CardsController` / `DomainsEndpoint` |
-| 编译 & 测试(216/216) | ✅ | 0 warning / 0 error |
-| 泛型 `IAuthenticator<TInput>` | ❌ | §4.2,用户选"保守版"跳过 |
-| 泛型 `ITokenIssuer<TToken>` | ❌ | 同上 |
-| `IAuditSink` 重命名 | ❌ | 同上 |
-| `ILockoutPolicy` 抽取 | ❌ | 同上 |
-| `IProtocolFacade` 自注册 | ❌ | §4.3,Program.cs 仍手工 |
-| §8.2 遗留:`EfAuditLogger` 依赖 `AppDbContext` + `IHttpContextAccessor` | ⚠️ | plan 风险表已标"暂忍",与 `IAuditStore` 抽象一并处理 |
-| §8.3 遗留:`AdSyncRunner`/`AdSyncService` 依赖 `IdpCore.Audit` | ⚠️ | 实施漏修,方案 A 搬 `IAuditLogger` 到 `Shared/Contracts/` 可解 |
+| `IAuditSink` 重命名 `IAuditLogger` | ✅ | 含实现类 `EfAuditLogger` → `AuditLogSink` |
+| `IAuditStore` + `IClientContextProvider` | ✅ | EfAuditLogger 的 DbContext/HTTP 依赖已抽离 |
+| `IAuthSessionRepo` + `ITicketBlacklistRepo` | ✅ | §8.2 完整修复(AuthSessionStore / TicketBlacklistService 不再用 AppDbContext) |
+| `ILockoutPolicy` 抽取 + `ILockoutRepo` | ✅ | 4 个 Record*Async 从 UserStore 搬到 policy + repo |
+| `IProtocolFacade` 自注册 | ✅ | `ImprivataFacade` + `AdminFacade` 各自注册服务和路由 |
+| 泛型 `IAuthenticator<TInput>` | ⏸️ Deferred | 见下方 "Deferred 项说明" |
+| 泛型 `ITokenIssuer<TToken>` | ⏸️ Deferred | 同上 |
+| §8.1 反模式 | ✅ | 零违规 + ArchUnit CI 保护 |
+| §8.2 反模式 | ✅ | 零违规 + ArchUnit CI 保护 |
+| §8.3 反模式 | ✅ | 零违规(PwdOrPin 搬到 Shared/Contracts)+ ArchUnit CI 保护 |
+| §8.4 反模式 | ✅ | 零违规 + ArchUnit CI 保护 |
+| Phase γ ArchUnitNET | ✅ | 10 条架构规则,226/226 tests 全绿 |
+| 编译 & 测试 | ✅ | 226/226,0 warning / 0 error |
+
+### Deferred 项说明
+
+两条泛型契约(§4.2)**有意延期**,**不视为欠债**:
+
+- **`IAuthenticator<TInput>` + `PwdInput`/`UidInput`/`PinInput` records** —— 本项目 [plan.md §1.3](../plan.md) 明确锁死 3 种 modality(PWD / UID / UID+PIN),其他(FP / PKI / KRB / QnA / OTP)"不在本项目范围"。没有第 4 种 modality 要来,统一签名带来的只有可读性损失:
+  - 命名抽象化(`IPwdAuthenticator` 一眼懂 → `IAuthenticator<PwdInput>` 要看 T 是啥)
+  - 调用点代码量 ≈ +200%(构造 Input record + 构造 AuthRequestContext + 调用 ≈ 3 行,原 1 行)
+- **`ITokenIssuer<TToken>` + 多 token 类型** —— 只有 OStick JWT 一种 token。[ADR-0001](./adr-0001-adsync-vs-saml.md) 显式放弃 SAML 路线,所以不会出现 SamlAssertion 这类并行 token 格式。
+
+**回顾触发条件**:以下任一发生时,回头做这两项:
+- 出现第 4 种 modality(FP / PKI / OTP 等进入本项目范围)
+- 引入 SAML / OIDC Facade 且需要非 OStick 的 token 格式
+- §4 强契约对齐成为合规 / 审计要求
+
+非此情况下,**保持现状是经过权衡的正确选择**。
 
 ### §4 完整契约进度
 
-**5 / 11(45%)**。已落位的 5 个:`IUserStore`, `IRemotePasswordVerifier`, `IUserDirectorySync`, `IAuthSessionStore`, `IPasswordHasher`。
+**11 实现 / 2 有意延期 = 13 项(阶段达标)**。已实现的 11 个:
+`IUserStore`, `IRemotePasswordVerifier`, `IUserDirectorySync`, `IAuthSessionStore` + `IAuthSessionRepo`, `ITicketBlacklist` + `ITicketBlacklistRepo`, `IAuditSink` + `IAuditStore`, `IClientContextProvider`, `IPasswordHasher`, `ILockoutPolicy` + `ILockoutRepo`, `IProtocolFacade`。
 
-### 下一步(若继续推进到 §4 完整契约)
+### 历史推进顺序(已完成)
 
-按代价递增排序(详细见 [实施记录文档](./adr-0002-phase-ab-implementation.md) "下一步"):
+按实际推进顺序记录,详见 [实施记录文档](./adr-0002-phase-ab-implementation.md):
 
-1. §8.3 违规修复(搬接口到 `Shared/Contracts/`)—— ~10 分钟
-2. `IAuditSink` 重命名 —— ~30 分钟
-3. `IProtocolFacade` 自注册 —— ~1 小时
-4. `ILockoutPolicy` 抽出 —— ~1 小时
-5. §8.2 违规修复(`IAuditStore` + `IClientContextProvider`)—— ~1-2 小时
-6. 泛型 `IAuthenticator<TInput>` / `ITokenIssuer<TToken>` —— ~2-4 小时
-7. Phase γ:ArchUnitNET 架构测试 —— ~1-2 小时
+1. ✅ Phase α + β 保守版(`IRemotePasswordVerifier` + `IUserDirectorySync` + 三层目录)
+2. ✅ §5 Contracts/ 子目录对齐
+3. ✅ §8.3 修复(`IAuditLogger` 搬到 `Shared/Contracts/`)
+4. ✅ §8.2 初修(`IAuditStore` + `IClientContextProvider`)
+5. ✅ §8.2 收尾(`IAuthSessionRepo` + `ITicketBlacklistRepo`)
+6. ✅ `IAuditLogger` → `IAuditSink` 重命名
+7. ✅ `IProtocolFacade` 自注册
+8. ✅ `ILockoutPolicy` 抽出
+9. ✅ Phase γ:ArchUnitNET 架构测试
