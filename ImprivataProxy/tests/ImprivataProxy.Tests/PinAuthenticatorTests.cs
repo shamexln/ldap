@@ -22,7 +22,7 @@ public class PinAuthenticatorTests
         public AuthSessionStore Sessions { get; }
         public PasswordHasher Hasher { get; } = new();
         public FakeTicketIssuer Tickets { get; } = new();
-        public EfAuditLogger Audit { get; }
+        public AuditLogSink Audit { get; }
         public AuthPolicyConfig Policy { get; }
         public PinAuthenticator Auth { get; }
 
@@ -30,7 +30,7 @@ public class PinAuthenticatorTests
         {
             Store = new UserStore(Ctx.Db);
             Sessions = new AuthSessionStore(new EfAuthSessionRepo(Ctx.Db));
-            Audit = new EfAuditLogger(new EfAuditStore(Ctx.Db));
+            Audit = new AuditLogSink(new EfAuditStore(Ctx.Db));
             Policy = policy ?? new AuthPolicyConfig
             {
                 PinMaxFails = 3,

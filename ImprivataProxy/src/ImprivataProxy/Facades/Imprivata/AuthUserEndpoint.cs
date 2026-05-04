@@ -94,7 +94,7 @@ public static class AuthUserEndpoint
     public static async Task<IResult> CancelAsync(
         HttpContext context,
         ITicketBlacklist blacklist,
-        IAuditLogger audit,
+        IAuditSink audit,
         CancellationToken ct)
     {
         var user = context.User;

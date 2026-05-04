@@ -17,7 +17,7 @@ public class UidAuthenticator : IUidAuthenticator
     private readonly IUserStore _users;
     private readonly IAuthSessionStore _sessions;
     private readonly ITicketIssuer _tickets;
-    private readonly IAuditLogger _audit;
+    private readonly IAuditSink _audit;
     private readonly AuthPolicyConfig _policy;
     private readonly ILogger<UidAuthenticator> _logger;
 
@@ -25,7 +25,7 @@ public class UidAuthenticator : IUidAuthenticator
         IUserStore users,
         IAuthSessionStore sessions,
         ITicketIssuer tickets,
-        IAuditLogger audit,
+        IAuditSink audit,
         IOptions<AuthPolicyConfig> policy,
         ILogger<UidAuthenticator> logger)
     {

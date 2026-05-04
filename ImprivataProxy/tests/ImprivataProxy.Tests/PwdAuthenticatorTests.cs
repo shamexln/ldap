@@ -46,7 +46,7 @@ public class PwdAuthenticatorTests
         public FakeLdap Ldap { get; } = new();
         public PasswordHasher Hasher { get; } = new();
         public FakeTicketIssuer Tickets { get; } = new();
-        public EfAuditLogger Audit { get; }
+        public AuditLogSink Audit { get; }
         public AuthPolicyConfig Policy { get; }
         public PwdAuthenticator Auth { get; }
 
@@ -54,7 +54,7 @@ public class PwdAuthenticatorTests
         {
             Ctx = new TestDbContext();
             Store = new UserStore(Ctx.Db);
-            Audit = new EfAuditLogger(new EfAuditStore(Ctx.Db));
+            Audit = new AuditLogSink(new EfAuditStore(Ctx.Db));
             Policy = policyOverride ?? new AuthPolicyConfig
             {
                 PwdMaxFails = 3,

@@ -6,16 +6,16 @@ using ImprivataProxy.Sources.Local.Entities;
 namespace ImprivataProxy.IdpCore.Audit;
 
 /// <summary>
-/// Default <see cref="IAuditLogger"/>. Builds an <see cref="AuditLogEntry"/>
+/// Default <see cref="IAuditSink"/>. Builds an <see cref="AuditLogEntry"/>
 /// from the call + ambient client context and hands it off to <see cref="IAuditStore"/>
 /// for persistence. No direct DbContext or HttpContext dependency —— see ADR-0002 §8.2.
 /// </summary>
-public class EfAuditLogger : IAuditLogger
+public class AuditLogSink : IAuditSink
 {
     private readonly IAuditStore _store;
     private readonly IClientContextProvider? _clientCtx;
 
-    public EfAuditLogger(IAuditStore store, IClientContextProvider? clientCtx = null)
+    public AuditLogSink(IAuditStore store, IClientContextProvider? clientCtx = null)
     {
         _store = store;
         _clientCtx = clientCtx;

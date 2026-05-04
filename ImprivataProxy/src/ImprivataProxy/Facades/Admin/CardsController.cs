@@ -14,9 +14,9 @@ namespace ImprivataProxy.Facades.Admin;
 public class CardsController : ControllerBase
 {
     private readonly IUserStore _users;
-    private readonly IAuditLogger _audit;
+    private readonly IAuditSink _audit;
 
-    public CardsController(IUserStore users, IAuditLogger audit)
+    public CardsController(IUserStore users, IAuditSink audit)
     {
         _users = users;
         _audit = audit;

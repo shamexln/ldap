@@ -15,9 +15,9 @@ public class UsersController : ControllerBase
 {
     private readonly IUserStore _users;
     private readonly IPasswordHasher _hasher;
-    private readonly IAuditLogger _audit;
+    private readonly IAuditSink _audit;
 
-    public UsersController(IUserStore users, IPasswordHasher hasher, IAuditLogger audit)
+    public UsersController(IUserStore users, IPasswordHasher hasher, IAuditSink audit)
     {
         _users = users;
         _hasher = hasher;

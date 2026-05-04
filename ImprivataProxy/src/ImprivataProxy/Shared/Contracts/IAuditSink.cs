@@ -1,6 +1,6 @@
 namespace ImprivataProxy.Shared.Contracts;
 
-public interface IAuditLogger
+public interface IAuditSink
 {
     Task LogAsync(
         string eventName,

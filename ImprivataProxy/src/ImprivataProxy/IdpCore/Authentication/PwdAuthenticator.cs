@@ -16,7 +16,7 @@ public class PwdAuthenticator : IPwdAuthenticator
     private readonly ILdapClient _ldap;
     private readonly IPasswordHasher _hasher;
     private readonly ITicketIssuer _tickets;
-    private readonly IAuditLogger _audit;
+    private readonly IAuditSink _audit;
     private readonly AuthPolicyConfig _policy;
     private readonly ILogger<PwdAuthenticator> _logger;
 
@@ -25,7 +25,7 @@ public class PwdAuthenticator : IPwdAuthenticator
         ILdapClient ldap,
         IPasswordHasher hasher,
         ITicketIssuer tickets,
-        IAuditLogger audit,
+        IAuditSink audit,
         IOptions<AuthPolicyConfig> policy,
         ILogger<PwdAuthenticator> logger)
     {

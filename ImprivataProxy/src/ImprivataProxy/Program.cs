@@ -45,7 +45,7 @@ builder.Services.AddScoped<IAuditStore, EfAuditStore>();
 builder.Services.AddScoped<IAuthSessionRepo, EfAuthSessionRepo>();
 builder.Services.AddScoped<ITicketBlacklistRepo, EfTicketBlacklistRepo>();
 builder.Services.AddScoped<IClientContextProvider, HttpClientContextProvider>();
-builder.Services.AddScoped<IAuditLogger, EfAuditLogger>();
+builder.Services.AddScoped<IAuditSink, AuditLogSink>();
 
 // Active Directory
 builder.Services.AddSingleton<ILdapClient, LdapClient>();

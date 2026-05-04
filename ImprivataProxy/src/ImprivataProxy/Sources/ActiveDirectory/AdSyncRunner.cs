@@ -6,7 +6,7 @@ using ImprivataProxy.Shared.Contracts;
 namespace ImprivataProxy.Sources.ActiveDirectory;
 
 /// <summary>
-/// One-shot sync runner. Scoped (uses scoped AppDbContext via UserStore / IAuditLogger).
+/// One-shot sync runner. Scoped (uses scoped AppDbContext via UserStore / IAuditSink).
 /// Implements ADR-0002 §4.1 <see cref="IUserDirectorySync"/> contract;
 /// future SCIM / Graph delta impls can replace this under the same interface.
 /// </summary>
@@ -14,13 +14,13 @@ public class AdSyncRunner : IUserDirectorySync
 {
     private readonly ILdapClient _ldap;
     private readonly IUserStore _users;
-    private readonly IAuditLogger _audit;
+    private readonly IAuditSink _audit;
     private readonly ILogger<AdSyncRunner> _logger;
 
     public AdSyncRunner(
         ILdapClient ldap,
         IUserStore users,
-        IAuditLogger audit,
+        IAuditSink audit,
         ILogger<AdSyncRunner> logger)
     {
         _ldap = ldap;

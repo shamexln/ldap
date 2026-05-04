@@ -17,12 +17,12 @@ public class UsersControllerTests
     {
         public TestDbContext Ctx { get; } = new();
         public PasswordHasher Hasher { get; } = new();
-        public EfAuditLogger Audit { get; }
+        public AuditLogSink Audit { get; }
         public UsersController Controller { get; }
 
         public Fixture()
         {
-            Audit = new EfAuditLogger(new EfAuditStore(Ctx.Db));
+            Audit = new AuditLogSink(new EfAuditStore(Ctx.Db));
             Controller = new UsersController(new UserStore(Ctx.Db), Hasher, Audit);
         }
 

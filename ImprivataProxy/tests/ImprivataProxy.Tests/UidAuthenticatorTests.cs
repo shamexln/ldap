@@ -20,7 +20,7 @@ public class UidAuthenticatorTests
         public UserStore Store { get; }
         public AuthSessionStore Sessions { get; }
         public FakeTicketIssuer Tickets { get; } = new();
-        public EfAuditLogger Audit { get; }
+        public AuditLogSink Audit { get; }
         public PasswordHasher Hasher { get; } = new();
         public UidAuthenticator Auth { get; }
 
@@ -28,7 +28,7 @@ public class UidAuthenticatorTests
         {
             Store = new UserStore(Ctx.Db);
             Sessions = new AuthSessionStore(new EfAuthSessionRepo(Ctx.Db));
-            Audit = new EfAuditLogger(new EfAuditStore(Ctx.Db));
+            Audit = new AuditLogSink(new EfAuditStore(Ctx.Db));
             Auth = new UidAuthenticator(
                 Store, Sessions, Tickets, Audit,
                 Options.Create(new AuthPolicyConfig { AuthSessionTtlSeconds = 60 }),

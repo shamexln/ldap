@@ -75,7 +75,7 @@ public class AdSyncService : BackgroundService
             try
             {
                 using var scope = _sp.CreateScope();
-                var audit = scope.ServiceProvider.GetRequiredService<IAuditLogger>();
+                var audit = scope.ServiceProvider.GetRequiredService<IAuditSink>();
                 await audit.LogAsync("ad_sync_failed",
                     detail: new { error = ex.Message, type = ex.GetType().Name },
                     ct: ct);

@@ -16,12 +16,12 @@ public class CardsControllerTests
     private sealed class Fixture : IDisposable
     {
         public TestDbContext Ctx { get; } = new();
-        public EfAuditLogger Audit { get; }
+        public AuditLogSink Audit { get; }
         public CardsController Controller { get; }
 
         public Fixture()
         {
-            Audit = new EfAuditLogger(new EfAuditStore(Ctx.Db));
+            Audit = new AuditLogSink(new EfAuditStore(Ctx.Db));
             Controller = new CardsController(new UserStore(Ctx.Db), Audit);
         }
 
