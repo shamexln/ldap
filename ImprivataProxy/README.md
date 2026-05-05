@@ -1,5 +1,7 @@
 # ImprivataProxy
 
+> **Last updated**: 2026-05-05
+
 Imprivata ProveID Web API 兼容的本地身份提供者。对外说 Imprivata XML,对后端用 Active Directory(LDAPS)+ 本地 SQLite 账户库。
 
 - 完整设计:[designdoc/LDAP.md](designdoc/LDAP.md)

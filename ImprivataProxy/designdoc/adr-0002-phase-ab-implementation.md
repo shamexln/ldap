@@ -1,7 +1,7 @@
 # ADR-0002 Phase α + β + 后续演进实施记录(归档)
 
 - **起始**: 2026-05-04
-- **最后更新**: 2026-05-04
+- **最后更新**: 2026-05-05
 - **当前状态**: ✅ ADR-0002 §3 / §5 / §8 全部达标;§4 契约 **11 实现 / 2 有意延期 = 13 项**(阶段达标);IdpCore 去 AD 化完成
 - **测试**: **227 / 227 passed**(216 单元+集成 + 11 ArchUnit 架构规则)
 - **相关文档**: [adr-0002-idp-architecture.md](./adr-0002-idp-architecture.md) / [adr-0001-adsync-vs-saml.md](./adr-0001-adsync-vs-saml.md)

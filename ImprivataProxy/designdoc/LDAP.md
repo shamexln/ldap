@@ -1,5 +1,7 @@
 # ImprivataProxy 设计文档 - 本地 IdP + AD 同步
 
+> **Last updated**: 2026-05-05
+
 ## 1. 概述
 
 ### 1.1 目标

@@ -1,10 +1,11 @@
 # ADR-0002:IdP 架构范式 —— Facade / Core / Source 三层
 
 - **状态**: Proposed
-- **日期**: 2026-05-04
+- **决策日期**: 2026-05-04
+- **最后更新**: 2026-05-05(§附录 B 状态卡片随 12 次后续 commit 持续刷新)
 - **决策人**: ImprivataProxy 项目组
 - **相关文档**: [adsync-vs-saml.md (ADR-0001)](./adr-0001-adsync-vs-saml.md) / [LDAP.md](./LDAP.md) / [plan.md](../plan.md)
-- **实施记录**: [adr-0002-phase-ab-implementation.md](./adr-0002-phase-ab-implementation.md) —— Phase α + β 已于 2026-05-04 执行(保守版),216/216 tests 仍绿
+- **实施记录**: [adr-0002-phase-ab-implementation.md](./adr-0002-phase-ab-implementation.md) —— Phase α + β + IdpCore 去 AD 化已落地,227/227 tests 绿
 
 ---
 

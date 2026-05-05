@@ -1,7 +1,8 @@
 # ADR-0001:身份源选型 —— AD LDAP 同步 vs SAML 属性富化
 
 - **状态**: Accepted
-- **日期**: 2026-05-03
+- **决策日期**: 2026-05-03
+- **最后更新**: 2026-05-05
 - **决策人**: ImprivataProxy 项目组
 - **相关文档**: [LDAP.md](./LDAP.md) / [plan.md](../plan.md)
 
