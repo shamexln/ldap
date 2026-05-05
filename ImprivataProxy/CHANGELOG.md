@@ -52,6 +52,7 @@
 - **§8.2 违规** —— `EfAuditLogger` / `AuthSessionStore` / `TicketBlacklistService` 全部抽出 `IXxxRepo`(Sources)+ policy(IdpCore),`IClientContextProvider` 承担 HTTP 抽象
 - **§8.3 违规** —— `IAuditLogger` 搬到 `Shared/Contracts/`;`PwdOrPin` 也搬到 `Shared/Contracts/`
 - **§4 部分契约**:`IAuditSink` 重命名、`ILockoutPolicy` 抽出、`IProtocolFacade` 自注册、各层 `Contracts/` 子目录——全部完成
+- **IdpCore 去 AD 化**:`IRemotePasswordVerifier` 签名从 `string distinguishedName` 升级到 `UserIdentity`(协议中立);`PwdAuthenticator` 不再依赖 `ILdapClient`,走 `IRemotePasswordVerifier`;`ILdapClient.BindAsUserAsync` 移除;`LdapClient.VerifyAsync` 真正 tri-state(Valid/Invalid/Unreachable);LDAP 不可达现在返回 `RtcSystemError` 不累计 lockout(修潜 UX bug);ArchUnit 加第 11 条规则 `IdpCore_Should_Not_Depend_On_ILdapClient`
 - **Phase γ ArchUnitNET** —— 10 条架构规则已上,`§8` 在 CI 被持续保护
 
 ### Consciously Deferred (**not technical debt** — explicit design decisions)
@@ -75,7 +76,7 @@
 ### Verification
 
 - `dotnet clean && dotnet build` —— 0 warnings, 0 errors
-- `dotnet test` —— **226 / 226 passed, 0 failed**(含 10 条 ArchUnit 架构规则)
+- `dotnet test` —— **227 / 227 passed, 0 failed**(含 11 条 ArchUnit 架构规则)
 - 反模式 grep(ADR-0002 §8):§8.1 / §8.2 / §8.3 / §8.4 全部零违规
 
 ### Refs

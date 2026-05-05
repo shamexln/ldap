@@ -70,7 +70,8 @@ public class PwdLoginIntegrationTests
         using var factory = new IntegrationAppFactory();
         // No pwd set locally — simulates first login after AD sync.
         await factory.SeedUserAsync("u1", "alice", "CORP");
-        factory.Ldap.BindResults[("CN=alice,OU=Users,DC=corp,DC=example,DC=com", "real-pwd")] = true;
+        factory.Ldap.VerifyResults[("CN=alice,OU=Users,DC=corp,DC=example,DC=com", "real-pwd")] =
+            ImprivataProxy.Sources.Contracts.RemoteVerifyOutcome.Valid;
 
         using var client = factory.CreateClient();
         var res = await client.PostAsync(AuthUserPath, PwdRequest("alice", "CORP", "real-pwd"));

@@ -1,14 +1,13 @@
 namespace ImprivataProxy.Sources.ActiveDirectory;
 
+/// <summary>
+/// AD-specific read access: paged search over the configured OU.
+/// Password verification lives under
+/// <see cref="ImprivataProxy.Sources.Contracts.IRemotePasswordVerifier"/>
+/// so that IdpCore stays protocol-neutral (ADR-0002 §4.1).
+/// </summary>
 public interface ILdapClient
 {
-    /// <summary>
-    /// Verifies a user's password by binding to AD with their DN + password.
-    /// Returns true if bind succeeds, false otherwise.
-    /// Used by PwdAuthenticator for the bind-fallback path.
-    /// </summary>
-    Task<bool> BindAsUserAsync(string userDn, string password, CancellationToken ct);
-
     /// <summary>
     /// Runs a paged search for all users under the configured base DN.
     /// Yields each result as AdUserDto. Throws on connection/bind failure.

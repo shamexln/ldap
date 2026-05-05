@@ -644,14 +644,16 @@ app.Run();
 | `IAuthSessionRepo` + `ITicketBlacklistRepo` | ✅ | §8.2 完整修复(AuthSessionStore / TicketBlacklistService 不再用 AppDbContext) |
 | `ILockoutPolicy` 抽取 + `ILockoutRepo` | ✅ | 4 个 Record*Async 从 UserStore 搬到 policy + repo |
 | `IProtocolFacade` 自注册 | ✅ | `ImprivataFacade` + `AdminFacade` 各自注册服务和路由 |
+| `UserIdentity` + `IRemotePasswordVerifier` 中立化 | ✅ | 接口参数 `string DN` → `UserIdentity`(含 DN/UPN/GUID);PwdAuthenticator 从 `ILdapClient` 切到 `IRemotePasswordVerifier`;IdpCore 不再依赖 AD 特定接口 |
 | 泛型 `IAuthenticator<TInput>` | ⏸️ Deferred | 见下方 "Deferred 项说明" |
 | 泛型 `ITokenIssuer<TToken>` | ⏸️ Deferred | 同上 |
 | §8.1 反模式 | ✅ | 零违规 + ArchUnit CI 保护 |
 | §8.2 反模式 | ✅ | 零违规 + ArchUnit CI 保护 |
 | §8.3 反模式 | ✅ | 零违规(PwdOrPin 搬到 Shared/Contracts)+ ArchUnit CI 保护 |
 | §8.4 反模式 | ✅ | 零违规 + ArchUnit CI 保护 |
-| Phase γ ArchUnitNET | ✅ | 10 条架构规则,226/226 tests 全绿 |
-| 编译 & 测试 | ✅ | 226/226,0 warning / 0 error |
+| IdpCore 不依赖 AD 特定 `ILdapClient` | ✅ | ArchUnit 规则 `IdpCore_Should_Not_Depend_On_ILdapClient` 持续保护 |
+| Phase γ ArchUnitNET | ✅ | **11** 条架构规则,227/227 tests 全绿 |
+| 编译 & 测试 | ✅ | 227/227,0 warning / 0 error |
 
 ### Deferred 项说明
 

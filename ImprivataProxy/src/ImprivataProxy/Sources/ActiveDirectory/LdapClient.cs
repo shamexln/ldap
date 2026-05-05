@@ -2,6 +2,7 @@ using System.DirectoryServices.Protocols;
 using System.Net;
 using System.Runtime.CompilerServices;
 using ImprivataProxy.Configuration;
+using ImprivataProxy.Shared.Contracts;
 using ImprivataProxy.Sources.Contracts;
 using Microsoft.Extensions.Options;
 
@@ -9,27 +10,6 @@ namespace ImprivataProxy.Sources.ActiveDirectory;
 
 public class LdapClient : ILdapClient, IRemotePasswordVerifier
 {
-    /// <summary>
-    /// ADR-0002 §4.1 适配:把 LDAP simple bind 包装成 IRemotePasswordVerifier 契约。
-    /// 行为等价于 BindAsUserAsync,但返回三态结果(Valid/Invalid/Unreachable)。
-    /// 当前 PwdAuthenticator 仍调 BindAsUserAsync;IRemotePasswordVerifier 作为未来切换点就位。
-    /// </summary>
-    public async Task<RemoteVerifyResult> VerifyAsync(
-        string distinguishedName, string password, CancellationToken ct)
-    {
-        try
-        {
-            var ok = await BindAsUserAsync(distinguishedName, password, ct);
-            return new RemoteVerifyResult(
-                ok ? RemoteVerifyOutcome.Valid : RemoteVerifyOutcome.Invalid);
-        }
-        catch (Exception ex)
-        {
-            return new RemoteVerifyResult(RemoteVerifyOutcome.Unreachable, ex.Message);
-        }
-    }
-
-
     // LDAP result code 49 = invalidCredentials per RFC 4511.
     private const int LdapInvalidCredentials = 49;
 
@@ -49,24 +29,37 @@ public class LdapClient : ILdapClient, IRemotePasswordVerifier
         _logger = logger;
     }
 
-    public Task<bool> BindAsUserAsync(string userDn, string password, CancellationToken ct)
+    /// <summary>
+    /// ADR-0002 §4.1: verifies the given user's password via LDAP simple bind.
+    /// Reads <see cref="UserIdentity.DistinguishedName"/>; other identity fields
+    /// are ignored here (UPN / GUID would be used by SAML / OIDC implementations).
+    /// Distinguishes three outcomes: Valid, Invalid(LDAP 49), Unreachable(other).
+    /// </summary>
+    public Task<RemoteVerifyResult> VerifyAsync(
+        UserIdentity identity, string password, CancellationToken ct)
     {
+        if (string.IsNullOrEmpty(identity.DistinguishedName))
+        {
+            return Task.FromResult(new RemoteVerifyResult(
+                RemoteVerifyOutcome.Invalid, "missing DistinguishedName"));
+        }
+
         return Task.Run(() =>
         {
             try
             {
                 using var conn = OpenConnection(_config.BindTimeoutSeconds);
-                conn.Bind(new NetworkCredential(userDn, password));
-                return true;
+                conn.Bind(new NetworkCredential(identity.DistinguishedName, password));
+                return new RemoteVerifyResult(RemoteVerifyOutcome.Valid);
             }
             catch (LdapException ex) when (ex.ErrorCode == LdapInvalidCredentials)
             {
-                return false;
+                return new RemoteVerifyResult(RemoteVerifyOutcome.Invalid);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "User bind failed for {UserDn}", userDn);
-                return false;
+                _logger.LogWarning(ex, "LDAP bind failed for {Dn}", identity.DistinguishedName);
+                return new RemoteVerifyResult(RemoteVerifyOutcome.Unreachable, ex.Message);
             }
         }, ct);
     }

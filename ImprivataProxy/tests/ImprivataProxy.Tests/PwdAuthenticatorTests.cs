@@ -1,8 +1,8 @@
 using ImprivataProxy.Sources.Local;
 using ImprivataProxy.Shared.Contracts;
 using ImprivataProxy.IdpCore.Audit;
+using ImprivataProxy.Sources.Contracts;
 using ImprivataProxy.Sources.Local.Entities;
-using ImprivataProxy.Sources.ActiveDirectory;
 using ImprivataProxy.IdpCore.Authentication;
 using ImprivataProxy.IdpCore.Sessions;
 using ImprivataProxy.Configuration;
@@ -16,26 +16,23 @@ namespace ImprivataProxy.Tests;
 public class PwdAuthenticatorTests
 {
     /// <summary>
-    /// In-memory LDAP stub with a configurable mapping of DN+password → success.
+    /// In-memory IRemotePasswordVerifier stub with a configurable mapping of
+    /// (DN, password) → RemoteVerifyOutcome. Default is Invalid when no entry.
+    /// Set the outcome to <see cref="RemoteVerifyOutcome.Unreachable"/> to simulate
+    /// an upstream outage (used to be modeled by a thrown exception).
     /// </summary>
-    private sealed class FakeLdap : ILdapClient
+    private sealed class FakeVerifier : IRemotePasswordVerifier
     {
-        public Dictionary<(string dn, string pwd), bool> BindResults { get; } = new();
-        public List<(string dn, string pwd)> BindCalls { get; } = new();
-        public Exception? ThrowOnBind { get; set; }
+        public Dictionary<(string dn, string pwd), RemoteVerifyOutcome> Results { get; } = new();
+        public List<(string dn, string pwd)> Calls { get; } = new();
 
-        public Task<bool> BindAsUserAsync(string userDn, string password, CancellationToken ct)
+        public Task<RemoteVerifyResult> VerifyAsync(
+            UserIdentity identity, string password, CancellationToken ct)
         {
-            BindCalls.Add((userDn, password));
-            if (ThrowOnBind is not null) throw ThrowOnBind;
-            return Task.FromResult(BindResults.GetValueOrDefault((userDn, password), false));
-        }
-
-        public async IAsyncEnumerable<AdUserDto> SearchAllUsersAsync(
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
-        {
-            await Task.CompletedTask;
-            yield break;
+            var dn = identity.DistinguishedName ?? "";
+            Calls.Add((dn, password));
+            var outcome = Results.GetValueOrDefault((dn, password), RemoteVerifyOutcome.Invalid);
+            return Task.FromResult(new RemoteVerifyResult(outcome));
         }
     }
 
@@ -43,7 +40,7 @@ public class PwdAuthenticatorTests
     {
         public TestDbContext Ctx { get; }
         public UserStore Store { get; }
-        public FakeLdap Ldap { get; } = new();
+        public FakeVerifier Remote { get; } = new();
         public PasswordHasher Hasher { get; } = new();
         public FakeTicketIssuer Tickets { get; } = new();
         public AuditLogSink Audit { get; }
@@ -63,7 +60,7 @@ public class PwdAuthenticatorTests
             };
             var lockout = new LockoutPolicy(new EfLockoutRepo(Ctx.Db), Options.Create(Policy));
             Auth = new PwdAuthenticator(
-                Store, Ldap, Hasher, lockout, Tickets, Audit,
+                Store, Remote, Hasher, lockout, Tickets, Audit,
                 Options.Create(Policy),
                 NullLogger<PwdAuthenticator>.Instance);
         }
@@ -100,7 +97,7 @@ public class PwdAuthenticatorTests
     {
         using var f = new Fixture();
         var u = await f.SeedUserAsync();
-        f.Ldap.BindResults[(u.AdDistinguishedName!, "pwd1")] = true;
+        f.Remote.Results[(u.AdDistinguishedName!, "pwd1")] = RemoteVerifyOutcome.Valid;
 
         var result = await f.Auth.AuthenticateAsync("alice", "CORP", "pwd1", default);
 
@@ -116,7 +113,7 @@ public class PwdAuthenticatorTests
     }
 
     [Fact]
-    public async Task Authenticate_LocalHashHit_DoesNotCallLdap()
+    public async Task Authenticate_LocalHashHit_DoesNotCallRemote()
     {
         using var f = new Fixture();
         var phc = f.Hasher.Hash("pwd1");
@@ -125,23 +122,23 @@ public class PwdAuthenticatorTests
         var result = await f.Auth.AuthenticateAsync("alice", "CORP", "pwd1", default);
 
         Assert.IsType<AuthResult.Success>(result);
-        Assert.Empty(f.Ldap.BindCalls);          // fast path
+        Assert.Empty(f.Remote.Calls);          // fast path
     }
 
     [Fact]
-    public async Task Authenticate_LocalHashExpired_TriggersBind()
+    public async Task Authenticate_LocalHashExpired_TriggersRemoteVerify()
     {
         using var f = new Fixture();
         var phc = f.Hasher.Hash("pwd1");
         var u = await f.SeedUserAsync(
             pwdHash: phc,
             pwdHashUpdatedAt: DateTime.UtcNow.AddDays(-30));  // past TTL (default 7 days)
-        f.Ldap.BindResults[(u.AdDistinguishedName!, "pwd1")] = true;
+        f.Remote.Results[(u.AdDistinguishedName!, "pwd1")] = RemoteVerifyOutcome.Valid;
 
         var result = await f.Auth.AuthenticateAsync("alice", "CORP", "pwd1", default);
 
         Assert.IsType<AuthResult.Success>(result);
-        Assert.Single(f.Ldap.BindCalls);         // bind happened
+        Assert.Single(f.Remote.Calls);         // verify happened
         var reloaded = f.Ctx.Db.Users.Single();
         Assert.True(reloaded.PwdHashUpdatedAt > DateTime.UtcNow.AddMinutes(-1));  // refreshed
     }
@@ -150,12 +147,12 @@ public class PwdAuthenticatorTests
     public async Task Authenticate_AdPasswordChanged_LocalHashReplaced()
     {
         using var f = new Fixture();
-        // Old hash still fresh by TTL, but password was changed in AD.
+        // Old hash still fresh by TTL, but password was changed at the source.
         var oldPhc = f.Hasher.Hash("old-pwd");
         var u = await f.SeedUserAsync(
             pwdHash: oldPhc,
             pwdHashUpdatedAt: DateTime.UtcNow);
-        f.Ldap.BindResults[(u.AdDistinguishedName!, "new-pwd")] = true;
+        f.Remote.Results[(u.AdDistinguishedName!, "new-pwd")] = RemoteVerifyOutcome.Valid;
 
         var result = await f.Auth.AuthenticateAsync("alice", "CORP", "new-pwd", default);
 
@@ -206,13 +203,13 @@ public class PwdAuthenticatorTests
         var u = await f.SeedUserAsync();
         u.PwdLockedUntil = DateTime.UtcNow.AddMinutes(5);
         await f.Ctx.Db.SaveChangesAsync();
-        f.Ldap.BindResults[(u.AdDistinguishedName!, "pwd1")] = true;
+        f.Remote.Results[(u.AdDistinguishedName!, "pwd1")] = RemoteVerifyOutcome.Valid;
 
         var result = await f.Auth.AuthenticateAsync("alice", "CORP", "pwd1", default);
 
         var fail = Assert.IsType<AuthResult.Failure>(result);
         Assert.Equal(ReturnCodes.RtcAccountLocked, fail.Rtc);
-        Assert.Empty(f.Ldap.BindCalls);
+        Assert.Empty(f.Remote.Calls);
     }
 
     [Fact]
@@ -245,7 +242,7 @@ public class PwdAuthenticatorTests
         var u = await f.SeedUserAsync();
         u.PwdFailCount = 2;
         await f.Ctx.Db.SaveChangesAsync();
-        f.Ldap.BindResults[(u.AdDistinguishedName!, "pwd1")] = true;
+        f.Remote.Results[(u.AdDistinguishedName!, "pwd1")] = RemoteVerifyOutcome.Valid;
 
         await f.Auth.AuthenticateAsync("alice", "CORP", "pwd1", default);
 
@@ -253,11 +250,12 @@ public class PwdAuthenticatorTests
     }
 
     [Fact]
-    public async Task Authenticate_LdapThrows_ReturnsSystemError_DoesNotLock()
+    public async Task Authenticate_RemoteUnreachable_ReturnsSystemError_DoesNotLock()
     {
         using var f = new Fixture();
-        await f.SeedUserAsync();
-        f.Ldap.ThrowOnBind = new InvalidOperationException("LDAP down");
+        var u = await f.SeedUserAsync();
+        // Simulate upstream outage by returning Unreachable (previously modeled as thrown exception).
+        f.Remote.Results[(u.AdDistinguishedName!, "pwd1")] = RemoteVerifyOutcome.Unreachable;
 
         var result = await f.Auth.AuthenticateAsync("alice", "CORP", "pwd1", default);
 

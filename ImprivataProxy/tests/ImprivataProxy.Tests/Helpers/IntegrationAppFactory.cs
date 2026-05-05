@@ -1,6 +1,7 @@
 using ImprivataProxy.Sources.Local;
 using ImprivataProxy.Shared.Contracts;
 using ImprivataProxy.Sources.ActiveDirectory;
+using ImprivataProxy.Sources.Contracts;
 using ImprivataProxy.IdpCore.Authentication;
 using ImprivataProxy.IdpCore.Sessions;
 using Microsoft.AspNetCore.Hosting;
@@ -63,9 +64,13 @@ public sealed class IntegrationAppFactory : WebApplicationFactory<Program>
             services.RemoveAll<DbContextOptions<AppDbContext>>();
             services.AddDbContext<AppDbContext>(opt => opt.UseSqlite(_conn));
 
-            // Swap the real LdapClient for the fake.
+            // Swap the real LdapClient for the fake — registered under BOTH interfaces
+            // since it implements ILdapClient (for AD sync) and IRemotePasswordVerifier
+            // (for PwdAuthenticator). Same single instance fronts both roles.
             services.RemoveAll<ILdapClient>();
+            services.RemoveAll<IRemotePasswordVerifier>();
             services.AddSingleton<ILdapClient>(Ldap);
+            services.AddSingleton<IRemotePasswordVerifier>(Ldap);
 
             // Make sure the AD sync background service never actually runs during tests;
             // remove the hosted-service registration but keep AdSyncService resolvable

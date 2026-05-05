@@ -2,8 +2,8 @@
 
 - **起始**: 2026-05-04
 - **最后更新**: 2026-05-04
-- **当前状态**: ✅ ADR-0002 §3 / §5 / §8 全部达标;§4 契约 **11 实现 / 2 有意延期 = 13 项**(阶段达标)
-- **测试**: **226 / 226 passed**(216 单元+集成 + 10 ArchUnit 架构规则)
+- **当前状态**: ✅ ADR-0002 §3 / §5 / §8 全部达标;§4 契约 **11 实现 / 2 有意延期 = 13 项**(阶段达标);IdpCore 去 AD 化完成
+- **测试**: **227 / 227 passed**(216 单元+集成 + 11 ArchUnit 架构规则)
 - **相关文档**: [adr-0002-idp-architecture.md](./adr-0002-idp-architecture.md) / [adr-0001-adsync-vs-saml.md](./adr-0001-adsync-vs-saml.md)
 - **GitHub**: [github.com/shamexln/ldap](https://github.com/shamexln/ldap) `main` 分支
 
@@ -22,7 +22,7 @@
 
 **初始状态**:Phase α + β(保守版)完成,§5 各层 Contracts/ 仅 `Sources/`,§8.2/§8.3 有遗留。
 
-### 后续推进(§5 + §8 收尾 + §4 契约深化)—— 9 commits
+### 后续推进(§5 + §8 收尾 + §4 契约深化 + IdpCore 去 AD 化)—— 11 commits
 
 | # | Commit | 主题 | ADR 章节 |
 |:-:|--------|------|---------|
@@ -35,6 +35,8 @@
 | 7 | `1f81ea0` | refactor: extract ILockoutPolicy (ADR-0002 §4.2) | §4.2 policy + ILockoutRepo,`PwdOrPin` 搬 Shared |
 | 8 | `11a6ff5` | test: add ArchUnitNET layering tests (ADR-0002 Phase γ) | **Phase γ** 10 条架构规则 |
 | 9 | `6b1adb5` | docs: defer §4 generic interfaces — explicit design decision, not tech debt | §4.2 泛型 IAuthenticator/ITokenIssuer 显式 Deferred |
+| 10 | `4fcfe0a` | docs: annotate adr-0002-phase-ab-implementation.md with commit hashes | 实施记录加 38 处 commit hash 回链 |
+| 11 | _TBD_ | refactor: de-AD-ify IRemotePasswordVerifier — introduce UserIdentity, wire PwdAuthenticator through the verifier | §4.1 去 AD 化:UserIdentity 中立模型 + PwdAuthenticator 不再依赖 ILdapClient + ArchUnit 新规则 |
 
 ### §4 完整契约进度
 
@@ -480,6 +482,58 @@ dotnet clean && dotnet build && dotnet test     # Passed: 216
 - [adr-0002-idp-architecture.md](./adr-0002-idp-architecture.md) §附录 B 状态卡片刷新 + 新增 "Deferred 项说明"
 - 本文档("下一步" 改为 "后续推进状态") + 新增 "有意延期" 小节
 - [CHANGELOG.md](../CHANGELOG.md):把原先 "Deferred (known technical debt)" 块拆成 `Resolved` 和 `Consciously Deferred`
+
+### 10. `4fcfe0a` — 实施记录加 38 处 commit hash 回链
+
+**背景**:本文档"后续推进状态"列了 7 条概要,但缺 commit hash。未来读者想查"某项改动是哪个 commit"要去翻 git log。
+
+**做了什么**:
+- 头部状态行刷新(226/226 + 11 实现/2 有意延期)
+- 新增 "成就一览":4 初始 commits 表 + 9 后续 commits 表 + §4 契约逐条 → commit hash + §8 反模式 → commit hash
+- "后续推进状态" 改写 "后续推进明细" —— 9 个带 hash 标题的 block
+- 删除陈旧的 "⚠️ 已知遗留" 表和 "§4 5/11" 旧数据
+
+文档从 352 行 → 502 行,新增 38 处 commit hash 回链。零代码改动。
+
+---
+
+### 11. (本次 commit)— §4.1 IdpCore 去 AD 化:UserIdentity + IRemotePasswordVerifier 真正接通
+
+**背景**:外部评审指出,虽然 `IRemotePasswordVerifier` 说是"通用抽象",但接口签名 `VerifyAsync(string distinguishedName, ...)` 是 LDAP 专属语义,且 `PwdAuthenticator` 实际走的是 `ILdapClient.BindAsUserAsync`,`IRemotePasswordVerifier` 在 DI 容器里无人注入——形同"死代码"。结论:当前契约形状和实现落地仍是 **AD/Ldap-first**。
+
+**做了什么**:
+
+**新抽象**:
+- 新建 `Shared/Contracts/UserIdentity.cs` — 协议中立身份 record:`Username` + `Domain` + `DistinguishedName?` + `UserPrincipalName?` + `ObjectGuid?`。每种 verifier 按自己理解的字段解读(LDAP → DN;SAML ECP → UPN;...)
+
+**契约升级**:
+- `IRemotePasswordVerifier.VerifyAsync` 签名 `string distinguishedName` → `UserIdentity identity`
+- 文档注释强调各实现自己选字段,PwdAuthenticator 协议无关
+
+**LDAP 适配器清洁化**:
+- `ILdapClient.BindAsUserAsync` 删除(AD 特定,本不该在公共接口)
+- `LdapClient.VerifyAsync` 重写:直接打开 LDAP 连接 + bind,按异常类型分 `Valid` / `Invalid`(LDAP 49) / `Unreachable`(其他);tri-state 真实生效(之前 `Unreachable` 分支是死代码)
+- `ILdapClient` 瘦身到只剩 `SearchAllUsersAsync`
+
+**IdpCore 切换**:
+- `PwdAuthenticator` 字段 `ILdapClient _ldap` → `IRemotePasswordVerifier _remote`
+- 构造 `UserIdentity` 从 User 实体,调 `_remote.VerifyAsync`
+- **顺手修 UX bug**:LDAP 宕机原本被吞掉日志后作为"invalid credentials"返回 + 累计 lockout。现在返回 `Unreachable` → `RtcSystemError`,不累计 lockout。用户稍后重试即可
+
+**测试适配**:
+- `PwdAuthenticatorTests.FakeLdap` → `FakeVerifier`(实现 `IRemotePasswordVerifier`),字段 `Results: Dictionary<(dn,pwd), RemoteVerifyOutcome>` 替 `BindResults`
+- `FakeLdapClient`(Helpers) 瘦身 + 加 `IRemotePasswordVerifier` 双接口
+- `IntegrationAppFactory` DI 现 `RemoveAll<ILdapClient>` + `RemoveAll<IRemotePasswordVerifier>` 然后双注册同一 fake
+
+**ArchUnit 新规则(第 11 条)**:
+- `IdpCore_Should_Not_Depend_On_ILdapClient` —— 锁死 IdpCore 不得直接引用 AD 特定的 `ILdapClient`
+
+**验证**:227/227 tests 绿(原 226 + 新 ArchUnit 1 条)。
+
+**结构效果**:
+- `IRemotePasswordVerifier` 从"DI 容器里站着但没人拿"变成 **PwdAuthenticator 的唯一验证通道**
+- 未来加 `SamlEcpVerifier : IRemotePasswordVerifier` → 在 Program.cs 换一行 DI,`PwdAuthenticator` 零改动
+- IdpCore 目录下 grep `ILdapClient` 零命中,ArchUnit 持续保护
 
 ---
 

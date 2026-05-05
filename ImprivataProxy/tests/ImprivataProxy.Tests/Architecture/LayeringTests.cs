@@ -113,6 +113,20 @@ public class LayeringTests
                .Check(Arch);
     }
 
+    [Fact]
+    public void IdpCore_Should_Not_Depend_On_ILdapClient()
+    {
+        // IdpCore should use IRemotePasswordVerifier (protocol-neutral), not ILdapClient
+        // (AD/LDAP-specific). Lets SAML ECP / OIDC ROPC implementations slot in without
+        // touching PwdAuthenticator.
+        Types().That().HaveFullNameMatching(IdpCoreTypes)
+               .Should().NotDependOnAny(
+                   Types().That().HaveName("ILdapClient"))
+               .Because("ADR-0002 §4.1: IdpCore consumes IRemotePasswordVerifier (protocol-neutral), "
+                      + "never ILdapClient (AD-specific).")
+               .Check(Arch);
+    }
+
     // ========================================================================
     // §8.3 Sources must not depend on IdpCore or Facades.
     //   Allowed: Shared.Contracts (layer-neutral contracts like PwdOrPin, IAuditSink).

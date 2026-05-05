@@ -1,21 +1,32 @@
+using ImprivataProxy.Shared.Contracts;
 using ImprivataProxy.Sources.ActiveDirectory;
+using ImprivataProxy.Sources.Contracts;
 
 namespace ImprivataProxy.Tests.Helpers;
 
 /// <summary>
-/// Reusable fake ILdapClient for unit and integration tests.
+/// Reusable fake for integration tests. Implements BOTH <see cref="ILdapClient"/>
+/// (for AD sync tests — exposes <see cref="Users"/>) and
+/// <see cref="IRemotePasswordVerifier"/> (for PWD authentication tests — exposes
+/// <see cref="VerifyResults"/> keyed by (DN, password)). The same single
+/// instance is registered twice in the DI container by IntegrationAppFactory.
 /// </summary>
-public class FakeLdapClient : ILdapClient
+public class FakeLdapClient : ILdapClient, IRemotePasswordVerifier
 {
-    public Dictionary<(string dn, string pwd), bool> BindResults { get; } = new();
+    /// <summary>Maps (distinguishedName, password) → outcome. Missing keys default to <see cref="RemoteVerifyOutcome.Invalid"/>.</summary>
+    public Dictionary<(string dn, string pwd), RemoteVerifyOutcome> VerifyResults { get; } = new();
+
+    /// <summary>Users yielded by <see cref="SearchAllUsersAsync"/>.</summary>
     public List<AdUserDto> Users { get; } = new();
-    public Exception? ThrowOnBind { get; set; }
+
     public Exception? ThrowOnSearch { get; set; }
 
-    public Task<bool> BindAsUserAsync(string userDn, string password, CancellationToken ct)
+    public Task<RemoteVerifyResult> VerifyAsync(
+        UserIdentity identity, string password, CancellationToken ct)
     {
-        if (ThrowOnBind is not null) throw ThrowOnBind;
-        return Task.FromResult(BindResults.GetValueOrDefault((userDn, password), false));
+        var dn = identity.DistinguishedName ?? "";
+        var outcome = VerifyResults.GetValueOrDefault((dn, password), RemoteVerifyOutcome.Invalid);
+        return Task.FromResult(new RemoteVerifyResult(outcome));
     }
 
     public async IAsyncEnumerable<AdUserDto> SearchAllUsersAsync(

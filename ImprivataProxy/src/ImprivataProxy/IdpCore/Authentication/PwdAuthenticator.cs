@@ -2,7 +2,6 @@ using ImprivataProxy.Configuration;
 using ImprivataProxy.Facades.Imprivata;
 using ImprivataProxy.IdpCore.Tokens;
 using ImprivataProxy.Shared.Contracts;
-using ImprivataProxy.Sources.ActiveDirectory;
 using ImprivataProxy.Sources.Contracts;
 using ImprivataProxy.Sources.Local.Entities;
 using Microsoft.Extensions.Options;
@@ -12,7 +11,7 @@ namespace ImprivataProxy.IdpCore.Authentication;
 public class PwdAuthenticator : IPwdAuthenticator
 {
     private readonly IUserStore _users;
-    private readonly ILdapClient _ldap;
+    private readonly IRemotePasswordVerifier _remote;
     private readonly IPasswordHasher _hasher;
     private readonly ILockoutPolicy _lockout;
     private readonly ITicketIssuer _tickets;
@@ -22,7 +21,7 @@ public class PwdAuthenticator : IPwdAuthenticator
 
     public PwdAuthenticator(
         IUserStore users,
-        ILdapClient ldap,
+        IRemotePasswordVerifier remote,
         IPasswordHasher hasher,
         ILockoutPolicy lockout,
         ITicketIssuer tickets,
@@ -31,7 +30,7 @@ public class PwdAuthenticator : IPwdAuthenticator
         ILogger<PwdAuthenticator> logger)
     {
         _users = users;
-        _ldap = ldap;
+        _remote = remote;
         _hasher = hasher;
         _lockout = lockout;
         _tickets = tickets;
@@ -76,55 +75,42 @@ public class PwdAuthenticator : IPwdAuthenticator
             return await SucceedAsync(user, username, domain, "local_hash", ct);
         }
 
-        // Path B: fall back to AD bind. Covers first login, TTL expiry, and
-        //         the case where the user changed their password in AD.
-        if (string.IsNullOrEmpty(user.AdDistinguishedName))
+        // Path B: fall back to the remote verifier (today: LDAP bind; future: SAML ECP / OIDC ROPC).
+        //         Covers first login, TTL expiry, and the case where the user changed
+        //         their password at the external identity source.
+        var identity = BuildIdentity(user);
+        var verify = await _remote.VerifyAsync(identity, password, ct);
+
+        switch (verify.Outcome)
         {
-            // AD-linked users always have a DN from sync; missing means misconfig or non-AD user.
-            _logger.LogWarning("User {Id} has no ad_distinguished_name; cannot bind-fallback", user.Id);
-            var after = await _lockout.OnFailureAsync(user.Id, PwdOrPin.Pwd, ct);
-            await _audit.LogAsync("pwd_login_fail",
-                username: username, domain: domain,
-                detail: new { reason = "no_dn_for_bind" }, ct: ct);
-            return new AuthResult.Failure(
-                after.IsLocked ? ReturnCodes.RtcAccountLocked : ReturnCodes.RtcInvalidCredentials,
-                "invalid credentials");
+            case RemoteVerifyOutcome.Valid:
+                // Refresh the local hash so subsequent logins stay fast.
+                var newHash = _hasher.Hash(password);
+                await _users.UpdatePwdHashAsync(user.Id, newHash, ct);
+                user.PwdHash = newHash;
+                user.PwdHashUpdatedAt = DateTime.UtcNow;
+                return await SucceedAsync(user, username, domain, "bind_fallback", ct);
+
+            case RemoteVerifyOutcome.Invalid:
+                var after = await _lockout.OnFailureAsync(user.Id, PwdOrPin.Pwd, ct);
+                await _audit.LogAsync("pwd_login_fail",
+                    username: username, domain: domain,
+                    detail: new { reason = "remote_invalid", justLocked = after.IsLocked }, ct: ct);
+                return new AuthResult.Failure(
+                    after.IsLocked ? ReturnCodes.RtcAccountLocked : ReturnCodes.RtcInvalidCredentials,
+                    "invalid credentials");
+
+            case RemoteVerifyOutcome.Unreachable:
+            default:
+                // Outage: don't count as a failed attempt, don't consume lockout budget.
+                // User sees "system error" (retry later) rather than "invalid credentials".
+                _logger.LogError("Remote verifier unreachable for {Username}@{Domain}: {Diag}",
+                    username, domain, verify.Diagnostic);
+                await _audit.LogAsync("pwd_login_error",
+                    username: username, domain: domain,
+                    detail: new { reason = "remote_verifier_unreachable", error = verify.Diagnostic }, ct: ct);
+                return new AuthResult.Failure(ReturnCodes.RtcSystemError, "system error");
         }
-
-        bool bindOk;
-        try
-        {
-            bindOk = await _ldap.BindAsUserAsync(user.AdDistinguishedName, password, ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "AD bind threw for {Username}@{Domain}", username, domain);
-            await _audit.LogAsync("pwd_login_error",
-                username: username, domain: domain,
-                detail: new { error = ex.Message }, ct: ct);
-            return new AuthResult.Failure(ReturnCodes.RtcSystemError, "system error");
-        }
-
-        if (!bindOk)
-        {
-            var after = await _lockout.OnFailureAsync(user.Id, PwdOrPin.Pwd, ct);
-            await _audit.LogAsync("pwd_login_fail",
-                username: username, domain: domain,
-                detail: new { reason = "bind_failed", justLocked = after.IsLocked }, ct: ct);
-            return new AuthResult.Failure(
-                after.IsLocked ? ReturnCodes.RtcAccountLocked : ReturnCodes.RtcInvalidCredentials,
-                "invalid credentials");
-        }
-
-        // Bind succeeded: refresh the local hash so subsequent logins stay fast.
-        var newHash = _hasher.Hash(password);
-        await _users.UpdatePwdHashAsync(user.Id, newHash, ct);
-
-        // Reload to see the fresh hash fields; minor, but keeps audit consistent.
-        user.PwdHash = newHash;
-        user.PwdHashUpdatedAt = DateTime.UtcNow;
-
-        return await SucceedAsync(user, username, domain, "bind_fallback", ct);
     }
 
     private async Task<AuthResult> SucceedAsync(
@@ -146,4 +132,15 @@ public class PwdAuthenticator : IPwdAuthenticator
         var age = DateTime.UtcNow - user.PwdHashUpdatedAt.Value;
         return age <= TimeSpan.FromDays(_policy.PwdHashTtlDays);
     }
+
+    /// <summary>
+    /// Build the protocol-neutral identity from our <see cref="User"/> row.
+    /// Each <see cref="IRemotePasswordVerifier"/> impl picks the field it needs.
+    /// </summary>
+    private static UserIdentity BuildIdentity(User user) => new(
+        Username: user.Username,
+        Domain: user.Domain,
+        DistinguishedName: user.AdDistinguishedName,
+        UserPrincipalName: null,             // not stored on User today; future schema extension
+        ObjectGuid: user.AdObjectGuid);
 }
