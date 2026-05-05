@@ -2951,3 +2951,191 @@ commit `6b1adb5` 推送。
 5. **三层文档闭环**:CHANGELOG(外部)+ ADR §附录 B(评审)+ 实施记录(详细过程 + 38 处 commit hash)
 
 **GitHub 主线**:`github.com/shamexln/ldap` main @ `4fcfe0a` → 下一次会是本次 session_conversation 归档的 commit。
+
+---
+
+## 👤 用户 [21:05:22]
+
+代码逻辑有没有实现SAML这一环节?
+
+---
+
+## 🤖 助手 [21:05:50]
+
+**答:代码里没有实现 SAML。所有 SAML 提及全是"未来可能"注释或显式 501 路径**。
+
+**审计结果**:
+- csproj:**无** SAML NuGet 依赖(`ITfoxtec.Identity.Saml2` 在 ADR-0001 决策里已删)
+- `Facades/` 目录:**无** `SamlFacade`
+- 5 处源码 SAML 提及全是注释(`IProtocolFacade`/`IRemotePasswordVerifier` 文档未来可替换)或 Imprivata 协议规范里的 `SAMLArtifact` 端点(显式返 501)
+- Program.cs:`// new SamlFacade(),   // future: browser-based SSO` — 被注释的占位
+
+**为什么不实现**:[ADR-0001](./adr-0001-adsync-vs-saml.md) 决策 —— 胖客户端无浏览器、医疗现场无浏览器、UID 卡号 SAML 不认、弱网 IdP 依赖不现实、LDAP simple bind 是"问外部密码对不对"的专用协议。
+
+**架构保留插槽**:`IProtocolFacade` + `IRemotePasswordVerifier` + `IUserDirectorySync` 三接口就是给未来 SAML/OIDC 留的。新建 `Facades/Saml/SamlFacade.cs` + `Sources/Saml/SamlEcpVerifier.cs` + Program.cs 一行 DI 即可接入,IdpCore 零改动。
+
+---
+
+## 👤 用户 [21:15:18]
+
+从现有代码看:
+- IRemotePasswordVerifier 注释写"今天由 LDAP 实现,未来可换 SAML/OIDC",但接口参数是 string distinguishedName(LDAP/AD 语义)
+- 当前唯一实现是 LdapClient.cs,Program.cs 注册成 IRemotePasswordVerifier
+- PwdAuthenticator 目前还在直接用 ILdapClient.BindAsUserAsync,IRemotePasswordVerifier 主要是"未来切换点"
+- 结论:设计目标是通用抽象,当前契约形状和实现落地仍是 AD/Ldap-first
+
+如果要真正去 AD 化,下一步就是把参数从 distinguishedName 提升为 UserIdentity(或等价中立模型),再做 Ad/Ldap、SAML/OIDC 各自适配器。这段 OpenAI 结论正确吗?
+
+---
+
+## 🤖 助手 [21:15:55]
+
+**结论:OpenAI 的 5 条 + 建议,全对**。
+
+逐条 grep 核对:
+- ✅ 注释确实写"今天由 LDAP 实现,未来可换 SAML/OIDC"
+- ✅ 参数是 `string distinguishedName`,LDAP/AD 语义
+- ✅ `grep IRemotePasswordVerifier` 只命中 3 文件(接口自身 + LdapClient + Program.cs 适配器注册)
+- ✅ `PwdAuthenticator.cs:97` `bindOk = await _ldap.BindAsUserAsync(...)` 走的是 ILdapClient 直连,`_ldap` 字段是 `ILdapClient` 不是 `IRemotePasswordVerifier`
+- ✅ 建议的 UserIdentity 提升方向正确
+
+**补 3 个 OpenAI 没提但同等重要的观察**:
+
+**A. `IRemotePasswordVerifier` 目前根本没被谁注入,等于死代码** —— 全项目 grep 只 3 处,零处业务代码注入它。`LdapClient` 实现了但通过 `ILdapClient` 那条路径被使用。
+
+**B. `ILdapClient` 还有第 2 个方法 `SearchAllUsersAsync`,RPV 不覆盖** —— search 那侧已抽成 `IUserDirectorySync`,架构整体 OK;但做"去 AD 化"时 bind 和 search 两面要同时考虑。
+
+**C. `UserIdentity` 是必需的,因为 LDAP 和 SAML 的"用户标识"不同** —— LDAP 用 DN,SAML 用 UPN 或 nameID。中立模型长这样:
+```csharp
+public record UserIdentity(
+    string Username, string Domain,
+    string? DistinguishedName,      // LDAP 用
+    string? UserPrincipalName,      // SAML/OIDC 用
+    string? ObjectGuid);            // AD 稳定主键
+```
+
+**去 AD 化具体步骤 + 代价**:
+1. 定义 `UserIdentity` record,放 `Shared/Contracts/` — 10 min
+2. 改 `IRemotePasswordVerifier.VerifyAsync` 参数为 UserIdentity — 30 min
+3. `LdapClient` 适配 — 1 小时
+4. 改 `PwdAuthenticator`:`ILdapClient _ldap` → `IRemotePasswordVerifier _remote` — 30 min
+5. ArchUnit 加规则:IdpCore 不得依赖 ILdapClient — 10 min
+
+合计 ~2-3 小时。做完 `IRemotePasswordVerifier` 从死代码变活代码,加 SAML ECP 只需新建 `SamlEcpVerifier : IRemotePasswordVerifier`,PwdAuthenticator 零改动。
+
+---
+
+## 👤 用户 [21:30:08]
+
+做
+
+---
+
+## 🤖 助手 [21:30:35]
+
+[EnterPlanMode] 写执行计划(4 步):
+
+1. 新建 UserIdentity + 改 IRemotePasswordVerifier 签名 + 重写 LdapClient.VerifyAsync
+2. 删 `ILdapClient.BindAsUserAsync` + LdapClient 同名公共方法
+3. 改 PwdAuthenticator 字段 + 构造器 + 调用路径
+4. 改测试 fixtures + ArchUnit 新规则 + 文档
+
+**关键技术决策**:
+- `LdapClient.VerifyAsync` 原先只是包 `BindAsUserAsync`(吞掉所有异常 return false),导致 `Unreachable` 分支是死代码。**重写**:直接打开 LDAP 连接 bind,按异常类型分 `Valid` / `Invalid`(LDAP 49) / `Unreachable`(其他)— tri-state 真实生效
+- **顺手修 UX bug**:LDAP 宕机原本被吞掉后作为"invalid credentials"返回 + 累计 lockout;新 `Unreachable` 分支 → `RtcSystemError` 不累计
+- `UserIdentity` 放 `Shared/Contracts/`(跨 IdpCore 和 Sources 的共用词汇)
+
+ExitPlanMode 批准。
+
+---
+
+## 👤 用户 [21:45:12]
+
+[批准 plan]
+
+---
+
+## 🤖 助手 [21:45:40]
+
+**工具调用**(按 plan 4 步执行):
+
+**Step 1** - contract + LdapClient:
+- `Write: Shared/Contracts/UserIdentity.cs` — record(Username, Domain, DN?, UPN?, GUID?)
+- `Edit: Sources/Contracts/IRemotePasswordVerifier.cs` — 签名改 UserIdentity,注释强调各实现自选字段
+- `Edit: Sources/ActiveDirectory/LdapClient.cs` — `VerifyAsync` 重写为直接 bind,tri-state
+
+**Step 2** - 删 Bind:
+- `Write: Sources/ActiveDirectory/ILdapClient.cs` — 只剩 `SearchAllUsersAsync`
+- LdapClient 里的 `BindAsUserAsync` 也一并删除(代码已内联到 VerifyAsync)
+
+**Step 3** - PwdAuthenticator:
+- `Write: IdpCore/Authentication/PwdAuthenticator.cs` — 字段 `_ldap: ILdapClient` → `_remote: IRemotePasswordVerifier`,加 `BuildIdentity(User)` 辅助方法,switch 三分支 map 到 Valid/Invalid/Unreachable
+
+**Step 4** - 测试 + ArchUnit:
+- `Write: tests/PwdAuthenticatorTests.cs` — 内部 `FakeLdap` → `FakeVerifier`(IRemotePasswordVerifier 实现),13 处测试断言里 `BindResults/BindCalls/ThrowOnBind` 改 `Results/Calls`
+- `Write: tests/Helpers/FakeLdapClient.cs` — 双接口实现,保留 `Users`(供 sync 测试)+ 新 `VerifyResults`
+- `Edit: tests/Helpers/IntegrationAppFactory.cs` — DI 双注册同一 fake
+- `Edit: tests/Integration/PwdLoginIntegrationTests.cs` — `BindResults[...] = true` → `VerifyResults[...] = Valid`
+- `Edit: tests/Architecture/LayeringTests.cs` — 加第 11 条规则 `IdpCore_Should_Not_Depend_On_ILdapClient`
+
+**文档**:
+- `Edit: adr-0002-idp-architecture.md` §附录 B 状态卡片 +1 行(UserIdentity);测试数 226 → 227
+- `Edit: adr-0002-phase-ab-implementation.md` 加 commit 11 block;commits 表 +2 行(10 + 11)
+- `Edit: CHANGELOG.md` Resolved 段 +1 bullet
+
+**验证**:
+- dotnet build clean
+- `grep ILdapClient src/ImprivataProxy/IdpCore/` → 空
+- `grep BindAsUserAsync src/ImprivataProxy/` → 空
+- `grep IRemotePasswordVerifier src/ImprivataProxy/` → 6 文件(从 3 升到 6)
+- **227/227 tests 全绿**
+
+commit `b7ae53c` 推送。
+
+**关键成果**:
+- `IRemotePasswordVerifier` 从 DI 容器里的"死代码"变成 PwdAuthenticator 的**唯一验证通道**
+- 未来加 `SamlEcpVerifier : IRemotePasswordVerifier` → 在 Program.cs 换一行 DI,PwdAuthenticator 零改动
+- ArchUnit 第 11 条持续保护 IdpCore 不回退到 AD 直连
+
+---
+
+## 👤 用户 [22:15:22]
+
+adr-0002-idp-architecture.md 和 adr-0002-phase-ab-implementation.md 和 LDAP.md 还有 session_conversation.md 更新了吗?
+
+---
+
+## 🤖 助手 [22:15:50]
+
+**答:2 个已更新,2 个没**。
+
+| 文档 | 状态 |
+|------|:----:|
+| adr-0002-idp-architecture.md | ✅ `b7ae53c` 更新 |
+| adr-0002-phase-ab-implementation.md | ✅ `b7ae53c` 更新 |
+| LDAP.md | ❌ 没动过(最后 commit `d752548` 初始版) |
+| session_conversation.md | ❌ 没追加 21:00 后的 de-AD-ify 讨论 |
+
+建议两个都补:
+- LDAP.md 加 §1.2 后一条"架构演进"橙书横幅指向 ADR-0002 §附录 B,**不**重复五大篇细节;业务层面(认证场景/AD 同步/数据模型)依然以 LDAP.md 为准
+- session_conversation.md 追加 21:00 后的 6 对 Q&A(审查 + 去 AD 化实施)
+
+---
+
+## 👤 用户 [22:30:08]
+
+两个都补齐(推荐)
+
+---
+
+## 🤖 助手 [22:30:40]
+
+**工具调用**:
+- `Edit: LDAP.md` — §1.2 末加 📙 橙书横幅:说明已完成 11 次后续 commit,本文下文的目录/接口细节过时,指向 ADR-0002 §附录 B + 实施记录;业务层面主体仍以本文为准
+- `Edit: session_conversation.md` — 追加 21:05 起的 6 对 Q&A:SAML 审计 / OpenAI 分析正确性 / 批准做去 AD 化 / plan 决策技术要点 / 执行 + 验证 / 本次文档补齐
+
+完成后 4 文档齐平,de-AD-ify 决策链在项目仓库完整闭环:
+1. **问题提出**(OpenAI 审查)→ session_conversation
+2. **根因分析 + 方案**(plan 模式)→ plan 文件(会话级)
+3. **代码落地**(227/227 tests)→ commit `b7ae53c`
+4. **状态更新**(ADR §附录 B + 实施记录 + CHANGELOG + LDAP.md 横幅)→ 本次 commit

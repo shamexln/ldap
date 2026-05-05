@@ -31,6 +31,8 @@
 > 📘 架构收敛的详细权衡、SAML 为何装不下刷卡/PIN 场景、以及未来可能切回 SAML 的扩展口,见决策记录 **[ADR-0001: AD LDAP 同步 vs SAML](./adr-0001-adsync-vs-saml.md)**。
 >
 > 📗 把 Imprivata ProveID Web API 当作 IdP 看,代理采用 **Facade / Core / Source 三层架构**(可插拔协议前端 + 协议无关认证核心 + 可替换身份源),见决策记录 **[ADR-0002: IdP 架构范式](./adr-0002-idp-architecture.md)**。
+>
+> 📙 **架构演进(2026-05-04 起)**:在 ADR-0002 基础上完成 11 次后续 commit(§5 目录规整 + §8.1-§8.4 反模式全部消除 + §4.1 契约 11/13 达标 + Phase γ ArchUnit CI 保护 + IdpCore 去 AD 化),本文档下文的目录/接口细节(如 "`EfAuditLogger`"、"`ILdapClient.BindAsUserAsync`" 等)**已过时**;最新架构状态卡片 + 每次推进的 commit hash 见 **[ADR-0002 §附录 B](./adr-0002-idp-architecture.md)** 和 **[实施记录](./adr-0002-phase-ab-implementation.md)**。业务层面的**认证场景 / AD 同步策略 / 数据模型**(§1.4 - §6 主体)不变,仍以本文档为准。
 
 ### 1.3 Imprivata ProveID Web API 特征
 
