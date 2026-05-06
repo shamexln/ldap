@@ -2,7 +2,7 @@
 
 - **项目**: Imprivata ProveID Web API 反向代理中间件
 - **起始日期**: 2026-05-03
-- **最后更新**: 2026-05-05
+- **最后更新**: 2026-05-06
 - **消息总数**: 249+(持续归档)
 
 ---
@@ -3140,3 +3140,171 @@ adr-0002-idp-architecture.md 和 adr-0002-phase-ab-implementation.md 和 LDAP.md
 2. **根因分析 + 方案**(plan 模式)→ plan 文件(会话级)
 3. **代码落地**(227/227 tests)→ commit `b7ae53c`
 4. **状态更新**(ADR §附录 B + 实施记录 + CHANGELOG + LDAP.md 横幅)→ 本次 commit
+
+---
+
+## 👤 用户 [2026-05-06 — Gateway 集成联调]
+
+Draeger Gateway 已连接到我们的代理(192.168.229.115:80),开始端到端联调。
+
+---
+
+## 🤖 助手
+
+**阶段 1:Domains 端点格式修复**
+
+Gateway 发 `GET /sso/ProveIDWeb/v28/Domains` 后不继续发 AuthUser。分析发现我们响应格式 `<Domain name="..." type="AD"/>` 与真实 Imprivata 不同。
+
+重写 `DomainsEndpoint.cs`,匹配真实 Imprivata 格式:
+```xml
+<Response>
+  <Domain id="...">
+    <UserDirType>AD</UserDirType>
+    <UseSSL>false</UseSSL>
+    <Name meaning="DNS">onesign.online</Name>
+    <Name meaning="NetBIOS">ONESIGN</Name>
+    <SPN>host/ssohost4kerberos.onesign.online@ONESIGN.ONLINE</SPN>
+  </Domain>
+  <Domain id="...">
+    <UserDirType>OneSign</UserDirType>
+    <UseSSL>false</UseSSL>
+    <Name>OneSignLocal</Name>
+  </Domain>
+</Response>
+```
+
+关键设计:
+- 使用 reverse DomainMapping 对外展示 `onesign.online`(内部 `ad.vista.com`)
+- 确定性 GUID(MD5 from domain name)作为 domain id
+- 加入 `OneSignLocal` 域(OneSign 类型)
+
+修复后 Gateway 成功解析域列表并继续发送 AuthUser 请求。
+
+---
+
+## 👤 用户
+
+设备发送登录请求,proxy 日志显示 domain 为空:
+```
+PWD auth rejected: no domain resolved for user=shaolei
+```
+
+Gateway 的 `WebAPIRequest.xml` 模板中有 `<Domain>onesign.online</Domain>`,但实际发来的请求里 domain 为空。
+
+---
+
+## 🤖 助手
+
+**阶段 2:空 domain 处理 + DefaultDomain 配置**
+
+添加 `ProxyConfig.DefaultDomain` 配置项(`appsettings.json` 设为 `"ad.vista.com"`),修改 `HandlePwdAsync`:
+
+```csharp
+var domain = requestDomain;
+if (string.IsNullOrEmpty(domain))
+{
+    domain = config.DefaultDomain ?? config.DomainMapping.Values.FirstOrDefault() ?? "";
+    logger.LogInformation("PWD auth: domain empty, using DefaultDomain='{Domain}'", domain);
+}
+else if (config.DomainMapping.TryGetValue(domain, out var mapped))
+{
+    domain = mapped;
+}
+```
+
+同时添加完整的 domain 解析日志(empty → DefaultDomain / mapped / as-is),方便后续调试。
+
+---
+
+## 👤 用户
+
+[设备 PWD 登录成功]
+```
+Gateway Log: AuthUser PWD → Success (shaolei/Draeger123)
+```
+
+能看到 proxy 日志:
+```
+PWD auth: domain empty, using DefaultDomain='ad.vista.com'
+PWD auth SUCCESS: user=shaolei, domain=ad.vista.com
+```
+
+---
+
+## 🤖 助手
+
+✅ **端到端 PWD 认证成功**:设备 → Gateway → ImprivataProxy → AD LDAP bind → 成功响应回传。
+
+---
+
+## 👤 用户
+
+现在测试刷卡(UID)。UID 响应里 domain 应该也是 `onesign.online` 不是 `ad.vista.com`。
+
+另外,PWD 方案如果密码错误,真实 Imprivata 响应是这样的:
+```xml
+<Response>
+  <AuthState disp="2" error="14" errorText="Invalid credentials."/>
+  <ModalityAuthOutput disp="2" error="1326" errorText="Logon failure: unknown user name or bad password." modalityID="PWD"/>
+  <Principal displayName="..." id="...">
+    <UserIdentity domainID="..." id="...">
+      <Username>...</Username>
+      <UserDirType>AD</UserDirType>
+      <Domain meaning="DNS">onesign.online</Domain>
+      <Domain meaning="NetBIOS">ONESIGN</Domain>
+    </UserIdentity>
+  </Principal>
+  <ModalityEnrollment .../>
+</Response>
+```
+
+我们现在返回的是 `disp="4"` 且没有用户信息。需要匹配。
+
+---
+
+## 🤖 助手
+
+**阶段 3:UID/PIN reverse domain mapping**
+
+提取 `GetReverseDomain(AuthResult, ProxyConfig)` 辅助方法,`HandleUidAsync` 和 `HandlePinAsync` 传入 reverse domain:
+```csharp
+private static string? GetReverseDomain(AuthResult result, ProxyConfig config)
+{
+    if (result is not AuthResult.Success s) return null;
+    var userDomain = s.User.Domain;
+    foreach (var kv in config.DomainMapping)
+        if (string.Equals(kv.Value, userDomain, StringComparison.OrdinalIgnoreCase))
+            return kv.Key;
+    return userDomain;
+}
+```
+
+**阶段 4:PWD Credential Failure(disp="2")格式**
+
+5 文件改动:
+
+1. `ReturnCodes.cs` — 添加 `DispCredentialFailure = 2`
+2. `AuthResult.cs` — 新增 `CredentialFailure(User, Rtc, Reason)` record 变体
+3. `PwdAuthenticator.cs` — `RemoteVerifyOutcome.Invalid` 分支改返回 `AuthResult.CredentialFailure`
+4. `ImprivataXmlBuilder.cs` — 新增 `CredentialFailure()` 方法,生成 disp="2" + Principal + ModalityEnrollment(无 AuthTicket/userPolicy)
+5. `AuthUserEndpoint.cs` — `ToXmlResult` 新增 `CredentialFailure` case
+
+设计意图:
+- 用户存在但密码错 → `disp="2"` + 用户信息(Gateway 可区分"需要重试"和"换用户")
+- 用户不存在 → `disp="4"`(不泄漏信息,安全考虑)
+
+---
+
+## 👤 用户
+
+我先停掉了(proxy 进程已停止)。把今天的内容更新到 session_conversation.md 和 adr-0002-phase-ab-implementation.md。
+
+---
+
+## 🤖 助手
+
+更新完成。今日联调成果:
+- **9 文件修改**(DomainsEndpoint / AuthUserEndpoint / ImprivataXmlBuilder / ReturnCodes / AuthResult / PwdAuthenticator / ProxyConfig / appsettings.json / Program.cs)
+- **Gateway 端到端 PWD 认证**:设备 → Gateway → Proxy → AD → 成功
+- **Credential Failure 格式**:匹配真实 Imprivata disp="2"(待重启验证)
+- **待验证**:UID 刷卡 + credential failure 实机测试

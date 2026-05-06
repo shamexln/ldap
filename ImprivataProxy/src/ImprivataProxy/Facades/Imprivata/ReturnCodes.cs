@@ -10,6 +10,7 @@ public static class ReturnCodes
     // AuthState @disp values
     public const int DispSuccess = 0;
     public const int DispPending = 1;
+    public const int DispCredentialFailure = 2;
     public const int DispFailure = 4;
 
     // rtc values used by this proxy

@@ -96,7 +96,7 @@ public class PwdAuthenticator : IPwdAuthenticator
                 await _audit.LogAsync("pwd_login_fail",
                     username: username, domain: domain,
                     detail: new { reason = "remote_invalid", justLocked = after.IsLocked }, ct: ct);
-                return new AuthResult.Failure(
+                return new AuthResult.CredentialFailure(user,
                     after.IsLocked ? ReturnCodes.RtcAccountLocked : ReturnCodes.RtcInvalidCredentials,
                     "invalid credentials");
 

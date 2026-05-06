@@ -2,7 +2,7 @@
 
 - **起始**: 2026-05-04
 - **最后更新**: 2026-05-05
-- **当前状态**: ✅ ADR-0002 §3 / §5 / §8 全部达标;§4 契约 **11 实现 / 2 有意延期 = 13 项**(阶段达标);IdpCore 去 AD 化完成
+- **当前状态**: ✅ ADR-0002 §3 / §5 / §8 全部达标;§4 契约 **11 实现 / 2 有意延期 = 13 项**(阶段达标);IdpCore 去 AD 化完成;Gateway 集成联调通过
 - **测试**: **227 / 227 passed**(216 单元+集成 + 11 ArchUnit 架构规则)
 - **相关文档**: [adr-0002-idp-architecture.md](./adr-0002-idp-architecture.md) / [adr-0001-adsync-vs-saml.md](./adr-0001-adsync-vs-saml.md)
 - **GitHub**: [github.com/shamexln/ldap](https://github.com/shamexln/ldap) `main` 分支
@@ -36,7 +36,16 @@
 | 8 | `11a6ff5` | test: add ArchUnitNET layering tests (ADR-0002 Phase γ) | **Phase γ** 10 条架构规则 |
 | 9 | `6b1adb5` | docs: defer §4 generic interfaces — explicit design decision, not tech debt | §4.2 泛型 IAuthenticator/ITokenIssuer 显式 Deferred |
 | 10 | `4fcfe0a` | docs: annotate adr-0002-phase-ab-implementation.md with commit hashes | 实施记录加 38 处 commit hash 回链 |
-| 11 | _TBD_ | refactor: de-AD-ify IRemotePasswordVerifier — introduce UserIdentity, wire PwdAuthenticator through the verifier | §4.1 去 AD 化:UserIdentity 中立模型 + PwdAuthenticator 不再依赖 ILdapClient + ArchUnit 新规则 |
+| 11 | `b7ae53c` | refactor: de-AD-ify IRemotePasswordVerifier — introduce UserIdentity, wire PwdAuthenticator through the verifier | §4.1 去 AD 化:UserIdentity 中立模型 + PwdAuthenticator 不再依赖 ILdapClient + ArchUnit 新规则 |
+
+### Gateway 集成联调(未提交,staged changes)— 5 commits 涉 9 文件
+
+| # | 主题 | 涉及文件 |
+|:-:|------|---------|
+| 12 | Domains 端点格式修复(匹配真实 Imprivata ProveID 响应) | `DomainsEndpoint.cs` |
+| 13 | 空 domain 处理 + DefaultDomain 配置 + domain 解析调试日志 | `AuthUserEndpoint.cs`, `ProxyConfig.cs`, `appsettings.json` |
+| 14 | UID/PIN 响应使用 reverse domain mapping | `AuthUserEndpoint.cs` |
+| 15 | PWD Credential Failure(disp="2")匹配真实 Imprivata 格式 | `ReturnCodes.cs`, `AuthResult.cs`, `PwdAuthenticator.cs`, `ImprivataXmlBuilder.cs`, `AuthUserEndpoint.cs` |
 
 ### §4 完整契约进度
 
@@ -534,6 +543,47 @@ dotnet clean && dotnet build && dotnet test     # Passed: 216
 - `IRemotePasswordVerifier` 从"DI 容器里站着但没人拿"变成 **PwdAuthenticator 的唯一验证通道**
 - 未来加 `SamlEcpVerifier : IRemotePasswordVerifier` → 在 Program.cs 换一行 DI,`PwdAuthenticator` 零改动
 - IdpCore 目录下 grep `ILdapClient` 零命中,ArchUnit 持续保护
+
+---
+
+### 12–15. (未提交)— Gateway 集成联调:Draeger Gateway → ImprivataProxy 端到端
+
+**背景**:Draeger Gateway(医疗设备 CMS 认证网关)通过 Imprivata ProveID Web API 协议对接,实际发来 `GET /sso/ProveIDWeb/v28/Domains` + `POST /sso/ProveIDWeb/v28/AuthUser`。首次联调发现我们的响应格式和真实 Imprivata 有差异,Gateway 不认。
+
+**做了什么**:
+
+**12. Domains 端点格式修复**:
+- 原始响应 `<Domain name="..." type="AD"/>` 被 Gateway 忽略
+- 重写为真实 Imprivata 格式:`<Domain id="..."><UserDirType>AD</UserDirType><UseSSL>false</UseSSL><Name meaning="DNS">onesign.online</Name><Name meaning="NetBIOS">ONESIGN</Name><SPN>...</SPN></Domain>`
+- 使用 reverse DomainMapping 对外展示 `onesign.online`(而非内部 `ad.vista.com`)
+- 加入 `OneSignLocal` 域条目(OneSign 类型)
+- 使用确定性 GUID(MD5 from domain name)作为 domain id
+
+**13. 空 domain 处理 + DefaultDomain**:
+- Gateway 发送的 AuthUser 请求中 `<Domain>` 为空(尽管 Domains 响应里有域信息)
+- 添加 `ProxyConfig.DefaultDomain`(appsettings.json `"DefaultDomain": "ad.vista.com"`)
+- 当请求 domain 为空时 fallback 到 `DefaultDomain`
+- 添加完整的 domain 解析日志:empty → DefaultDomain / mapped / as-is
+
+**14. UID/PIN reverse domain mapping**:
+- `HandleUidAsync` 和 `HandlePinAsync` 也需要 reverse domain(从 `ad.vista.com` → `onesign.online`)
+- 提取 `GetReverseDomain(AuthResult, ProxyConfig)` 辅助方法
+- 统一 3 种 modality 的 domain 显示逻辑
+
+**15. PWD Credential Failure 格式(disp="2")**:
+- 真实 Imprivata 密码错误返回 `disp="2"` + 用户 Principal 信息 + ModalityEnrollment
+- 我们原来返回 `disp="4"` + 无用户信息(Gateway 可能无法区分"密码错误"和"用户不存在")
+- 新增 `ReturnCodes.DispCredentialFailure = 2`
+- 新增 `AuthResult.CredentialFailure(User, Rtc, Reason)` 变体
+- `PwdAuthenticator` 的 `RemoteVerifyOutcome.Invalid` 分支改返回 `CredentialFailure`
+- `ImprivataXmlBuilder.CredentialFailure()` 生成带 Principal + ModalityEnrollment 但无 AuthTicket/userPolicy 的响应
+- `AuthUserEndpoint.ToXmlResult` 新增 `CredentialFailure` 分支
+
+**验证结果**(实机联调):
+- Draeger Gateway → `GET /Domains` → 正确解析域列表
+- 设备端 PWD 登录(shaolei/Draeger123)→ 认证成功,Gateway 回传 session
+- 密码错误 → `disp="2"` + 用户信息(待验证)
+- 用户不存在 → `disp="4"`(不泄漏信息)
 
 ---
 

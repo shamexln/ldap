@@ -16,4 +16,7 @@ public abstract record AuthResult
 
     /// <summary>Authentication failed. Rtc is the specific reason.</summary>
     public sealed record Failure(int Rtc, string Reason) : AuthResult;
+
+    /// <summary>User exists but credentials are wrong. Includes user info for rich error response.</summary>
+    public sealed record CredentialFailure(User User, int Rtc, string Reason) : AuthResult;
 }

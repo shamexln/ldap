@@ -107,6 +107,14 @@ using (var scope = app.Services.CreateScope())
     db.Database.Migrate();
 }
 
+if (app.Environment.IsDevelopment())
+{
+    app.UseCors(p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
+}
+
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
 app.UseMiddleware<RequestLoggingMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
@@ -116,6 +124,9 @@ foreach (var f in facades) f.MapEndpoints(app);
 
 // Infra-level endpoint (not protocol-specific)
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
+
+// SPA fallback: serve index.html for any unmatched route (Vue Router handles client-side routing)
+app.MapFallbackToFile("index.html");
 
 app.Run();
 
