@@ -1,7 +1,7 @@
 # ADR-0002 Phase α + β + 后续演进实施记录(归档)
 
 - **起始**: 2026-05-04
-- **最后更新**: 2026-05-05
+- **最后更新**: 2026-05-06
 - **当前状态**: ✅ ADR-0002 §3 / §5 / §8 全部达标;§4 契约 **11 实现 / 2 有意延期 = 13 项**(阶段达标);IdpCore 去 AD 化完成;Gateway 集成联调通过
 - **测试**: **227 / 227 passed**(216 单元+集成 + 11 ArchUnit 架构规则)
 - **相关文档**: [adr-0002-idp-architecture.md](./adr-0002-idp-architecture.md) / [adr-0001-adsync-vs-saml.md](./adr-0001-adsync-vs-saml.md)
@@ -9,7 +9,7 @@
 
 ---
 
-## 成就一览(13 个 commit 从 scaffold 到 §4 近乎对齐)
+## 成就一览(15 个 commit 从 scaffold 到 Gateway 集成联调)
 
 ### 初始建仓(Phase α + β 保守版)—— 4 commits
 
@@ -22,7 +22,7 @@
 
 **初始状态**:Phase α + β(保守版)完成,§5 各层 Contracts/ 仅 `Sources/`,§8.2/§8.3 有遗留。
 
-### 后续推进(§5 + §8 收尾 + §4 契约深化 + IdpCore 去 AD 化)—— 11 commits
+### 后续推进(§5 + §8 收尾 + §4 契约深化 + IdpCore 去 AD 化 + Gateway 联调)—— 12 commits
 
 | # | Commit | 主题 | ADR 章节 |
 |:-:|--------|------|---------|
@@ -37,15 +37,7 @@
 | 9 | `6b1adb5` | docs: defer §4 generic interfaces — explicit design decision, not tech debt | §4.2 泛型 IAuthenticator/ITokenIssuer 显式 Deferred |
 | 10 | `4fcfe0a` | docs: annotate adr-0002-phase-ab-implementation.md with commit hashes | 实施记录加 38 处 commit hash 回链 |
 | 11 | `b7ae53c` | refactor: de-AD-ify IRemotePasswordVerifier — introduce UserIdentity, wire PwdAuthenticator through the verifier | §4.1 去 AD 化:UserIdentity 中立模型 + PwdAuthenticator 不再依赖 ILdapClient + ArchUnit 新规则 |
-
-### Gateway 集成联调(未提交,staged changes)— 5 commits 涉 9 文件
-
-| # | 主题 | 涉及文件 |
-|:-:|------|---------|
-| 12 | Domains 端点格式修复(匹配真实 Imprivata ProveID 响应) | `DomainsEndpoint.cs` |
-| 13 | 空 domain 处理 + DefaultDomain 配置 + domain 解析调试日志 | `AuthUserEndpoint.cs`, `ProxyConfig.cs`, `appsettings.json` |
-| 14 | UID/PIN 响应使用 reverse domain mapping | `AuthUserEndpoint.cs` |
-| 15 | PWD Credential Failure(disp="2")匹配真实 Imprivata 格式 | `ReturnCodes.cs`, `AuthResult.cs`, `PwdAuthenticator.cs`, `ImprivataXmlBuilder.cs`, `AuthUserEndpoint.cs` |
+| 12 | `19febd2` | feat: Gateway integration — match real Imprivata ProveID response formats | Gateway 联调:Domains 格式 + 空 domain + reverse mapping + Credential Failure disp="2" |
 
 ### §4 完整契约进度
 
@@ -506,7 +498,7 @@ dotnet clean && dotnet build && dotnet test     # Passed: 216
 
 ---
 
-### 11. (本次 commit)— §4.1 IdpCore 去 AD 化:UserIdentity + IRemotePasswordVerifier 真正接通
+### 11. `b7ae53c` — §4.1 IdpCore 去 AD 化:UserIdentity + IRemotePasswordVerifier 真正接通
 
 **背景**:外部评审指出,虽然 `IRemotePasswordVerifier` 说是"通用抽象",但接口签名 `VerifyAsync(string distinguishedName, ...)` 是 LDAP 专属语义,且 `PwdAuthenticator` 实际走的是 `ILdapClient.BindAsUserAsync`,`IRemotePasswordVerifier` 在 DI 容器里无人注入——形同"死代码"。结论:当前契约形状和实现落地仍是 **AD/Ldap-first**。
 
@@ -546,7 +538,7 @@ dotnet clean && dotnet build && dotnet test     # Passed: 216
 
 ---
 
-### 12–15. (未提交)— Gateway 集成联调:Draeger Gateway → ImprivataProxy 端到端
+### 12. `19febd2` — Gateway 集成联调:Draeger Gateway → ImprivataProxy 端到端
 
 **背景**:Draeger Gateway(医疗设备 CMS 认证网关)通过 Imprivata ProveID Web API 协议对接,实际发来 `GET /sso/ProveIDWeb/v28/Domains` + `POST /sso/ProveIDWeb/v28/AuthUser`。首次联调发现我们的响应格式和真实 Imprivata 有差异,Gateway 不认。
 
