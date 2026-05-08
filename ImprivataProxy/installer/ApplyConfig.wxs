@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <!-- ================================================================
+       Custom Action: Apply user configuration to appsettings.json
+
+       Uses XmlConfig from WixToolset.Util to patch JSON is not ideal;
+       instead we bundle a small PowerShell config script and run it
+       as a deferred custom action after file installation.
+       ================================================================ -->
+  <Fragment>
+
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="ConfigScript" Guid="19A0B1C2-D3E4-5678-9ABC-DEF012345678">
+        <File Id="ApplyConfigPs1" Source="ApplyConfig.ps1" KeyPath="yes" />
+        <RemoveFile Id="RemoveConfigScript" Name="ApplyConfig.ps1" On="uninstall" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- Custom action: run the PowerShell config script after files are installed -->
+    <CustomAction Id="SetApplyConfigCmd"
+                  Property="ApplyConfig"
+                  Value="&quot;powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]ApplyConfig.ps1&quot; -ListenPort &quot;[LISTEN_PORT]&quot; -LdapUrl &quot;[LDAP_URL]&quot; -BaseDn &quot;[LDAP_BASE_DN]&quot; -ServiceDn &quot;[LDAP_SERVICE_DN]&quot;" />
+
+    <CustomAction Id="ApplyConfig"
+                  DllEntry="WixQuietExec64"
+                  Impersonate="no"
+                  Execute="deferred"
+                  BinaryRef="Wix4UtilCA_X64" />
+
+    <InstallExecuteSequence>
+      <Custom Action="SetApplyConfigCmd" After="InstallFiles" Condition="NOT Installed OR REINSTALL" />
+      <Custom Action="ApplyConfig" After="SetApplyConfigCmd" Condition="NOT Installed OR REINSTALL" />
+    </InstallExecuteSequence>
+
+  </Fragment>
+
+</Wix>

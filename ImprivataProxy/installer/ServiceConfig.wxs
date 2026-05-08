@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <!-- ================================================================
+       Windows Service Installation & Configuration
+       ================================================================ -->
+  <Fragment>
+    <DirectoryRef Id="INSTALLFOLDER">
+
+      <!-- Service executable component -->
+      <Component Id="ServiceComponent" Guid="F6A7B8C9-D0E1-2345-F012-456789012345">
+        <File Id="ServiceExe" Source="publish\ImprivataProxy.exe" KeyPath="yes" />
+
+        <ServiceInstall Id="InstallService"
+                        Name="ImprivataProxy"
+                        DisplayName="Imprivata Proxy Service"
+                        Description="Imprivata ProveID-compatible authentication proxy with LDAP/AD integration."
+                        Type="ownProcess"
+                        Start="auto"
+                        ErrorControl="normal"
+                        Account="LocalSystem">
+          <!-- Service recovery: restart on first, second, and subsequent failures -->
+          <util:ServiceConfig FirstFailureActionType="restart"
+                              SecondFailureActionType="restart"
+                              ThirdFailureActionType="restart"
+                              RestartServiceDelayInSeconds="30"
+                              ResetPeriodInDays="1" />
+        </ServiceInstall>
+
+        <!-- Stop and start service during install/uninstall -->
+        <ServiceControl Id="ControlService"
+                        Name="ImprivataProxy"
+                        Start="install"
+                        Stop="both"
+                        Remove="uninstall"
+                        Wait="yes" />
+      </Component>
+
+      <!-- Service environment variables (stored in registry) -->
+      <Component Id="ServiceEnvironment" Guid="A7B8C9D0-E1F2-3456-0123-567890123456">
+        <RegistryValue Root="HKLM"
+                       Key="SYSTEM\CurrentControlSet\Services\ImprivataProxy"
+                       Name="Environment"
+                       Type="multiString"
+                       Value="AD_SVC_PASSWORD=[AD_SVC_PASSWORD][~]ADMIN_PASSWORD=[ADMIN_PASSWORD][~]ASPNETCORE_ENVIRONMENT=Production"
+                       KeyPath="yes" />
+      </Component>
+
+    </DirectoryRef>
+  </Fragment>
+
+</Wix>

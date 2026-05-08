@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:firewall="http://wixtoolset.org/schemas/v4/wxs/firewall"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <Package Name="Imprivata Proxy Service"
+           Manufacturer="Vista"
+           Version="1.0.0.0"
+           UpgradeCode="E7A3B5D1-9C42-4F68-A1E0-3B7D5C8F2A94"
+           Scope="perMachine"
+           Language="1033"
+           Codepage="1252">
+
+    <SummaryInformation Description="Imprivata Proxy Service - LDAP/AD Authentication Gateway" />
+
+    <!-- Major upgrade: remove previous versions before installing new one -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed."
+                  Schedule="afterInstallInitialize" />
+
+    <!-- Embed the cabinet in the MSI for single-file distribution -->
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- ================================================================
+         Add/Remove Programs (ARP) display properties
+         ================================================================ -->
+    <Property Id="ARPCONTACT" Value="Vista" />
+    <Property Id="ARPURLINFOABOUT" Value="https://www.vista.com" />
+    <Property Id="ARPNOREPAIR" Value="yes" />
+
+    <!-- ================================================================
+         User-configurable properties (shown in UI dialogs)
+         ================================================================ -->
+    <Property Id="LISTEN_PORT" Value="80" />
+    <Property Id="LDAP_URL" Value="ldaps://sso.ad.vista.com:636" />
+    <Property Id="LDAP_BASE_DN" Value="DC=ad,DC=vista,DC=com" />
+    <Property Id="LDAP_SERVICE_DN" Value="CN=Administrator,CN=Users,DC=ad,DC=vista,DC=com" />
+    <Property Id="AD_SVC_PASSWORD" Hidden="yes" Secure="yes" />
+    <Property Id="ADMIN_PASSWORD" Hidden="yes" Secure="yes" />
+
+    <!-- ================================================================
+         Directory structure
+         ================================================================ -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="ImprivataProxy">
+        <Directory Id="DIR_Data" Name="data" />
+        <Directory Id="DIR_Logs" Name="logs" />
+        <Directory Id="DIR_Certs" Name="certs" />
+      </Directory>
+    </StandardDirectory>
+
+    <!-- ================================================================
+         Features
+         ================================================================ -->
+    <Feature Id="MainFeature" Title="Imprivata Proxy Service" Level="1">
+      <ComponentGroupRef Id="PublishFiles" />
+      <ComponentRef Id="AppSettingsConfig" />
+      <ComponentRef Id="CreateDataDir" />
+      <ComponentRef Id="CreateLogsDir" />
+      <ComponentRef Id="CreateCertsDir" />
+      <ComponentRef Id="ServiceComponent" />
+      <ComponentRef Id="ServiceEnvironment" />
+      <ComponentRef Id="FirewallRule" />
+      <ComponentRef Id="ConfigScript" />
+    </Feature>
+
+    <!-- ================================================================
+         Components: writable directories (empty, created at install time)
+         ================================================================ -->
+    <DirectoryRef Id="DIR_Data">
+      <Component Id="CreateDataDir" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
+        <CreateFolder>
+          <util:PermissionEx User="LOCAL SERVICE" GenericAll="yes" />
+        </CreateFolder>
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="DIR_Logs">
+      <Component Id="CreateLogsDir" Guid="B2C3D4E5-F6A7-8901-BCDE-F12345678901">
+        <CreateFolder>
+          <util:PermissionEx User="LOCAL SERVICE" GenericAll="yes" />
+        </CreateFolder>
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="DIR_Certs">
+      <Component Id="CreateCertsDir" Guid="C3D4E5F6-A7B8-9012-CDEF-123456789012">
+        <CreateFolder>
+          <util:PermissionEx User="LOCAL SERVICE" GenericAll="yes" />
+        </CreateFolder>
+      </Component>
+    </DirectoryRef>
+
+    <!-- ================================================================
+         Component: appsettings.json (NeverOverwrite to preserve user edits)
+         ================================================================ -->
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="AppSettingsConfig" Guid="D4E5F6A7-B8C9-0123-DEF0-234567890123" NeverOverwrite="yes">
+        <File Id="AppSettingsJson" Source="publish\appsettings.json" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- ================================================================
+         Component: Firewall rule for HTTP port
+         ================================================================ -->
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="FirewallRule" Guid="E5F6A7B8-C9D0-1234-EF01-345678901234">
+        <RegistryValue Root="HKLM" Key="SOFTWARE\Vista\ImprivataProxy"
+                       Name="FirewallConfigured" Type="integer" Value="1" KeyPath="yes" />
+        <firewall:FirewallException Id="ImprivataProxyHttp"
+                                     Name="Imprivata Proxy Service (HTTP)"
+                                     Port="[LISTEN_PORT]"
+                                     Protocol="tcp"
+                                     Scope="any"
+                                     Profile="all" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- ================================================================
+         UI: WixUI_InstallDir with custom CredentialsDlg inserted
+         Flow: InstallDirDlg -> CredentialsDlg -> VerifyReadyDlg
+         ================================================================ -->
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <ui:WixUI Id="WixUI_InstallDir" />
+
+    <!-- Override navigation to insert LdapConfigDlg and CredentialsDlg into the wizard flow -->
+    <UI>
+      <!-- Suppress the built-in InstallDirDlg [Next] -> VerifyReadyDlg -->
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg"
+               Condition="0" Order="1" />
+      <!-- InstallDirDlg [Next] -> LdapConfigDlg -->
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="LdapConfigDlg"
+               Order="9999" Condition="WIXUI_INSTALLDIR_VALID=&quot;1&quot;" />
+
+      <!-- LdapConfigDlg [Back] -> InstallDirDlg -->
+      <Publish Dialog="LdapConfigDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg" />
+
+      <!-- LdapConfigDlg [Next] -> CredentialsDlg -->
+      <Publish Dialog="LdapConfigDlg" Control="Next" Event="NewDialog" Value="CredentialsDlg" />
+
+      <!-- CredentialsDlg [Back] -> LdapConfigDlg -->
+      <Publish Dialog="CredentialsDlg" Control="Back" Event="NewDialog" Value="LdapConfigDlg" />
+
+      <!-- CredentialsDlg [Next] -> VerifyReadyDlg (only when both passwords provided) -->
+      <Publish Dialog="CredentialsDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg"
+               Condition="AD_SVC_PASSWORD AND ADMIN_PASSWORD" />
+
+      <!-- Suppress the built-in VerifyReadyDlg [Back] -> InstallDirDlg -->
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg"
+               Condition="0" Order="1" />
+      <!-- VerifyReadyDlg [Back] -> CredentialsDlg -->
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="CredentialsDlg"
+               Order="9999" Condition="NOT Installed" />
+    </UI>
+
+  </Package>
+
+</Wix>
