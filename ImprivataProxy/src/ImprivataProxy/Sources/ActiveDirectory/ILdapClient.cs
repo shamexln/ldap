@@ -13,4 +13,11 @@ public interface ILdapClient
     /// Yields each result as AdUserDto. Throws on connection/bind failure.
     /// </summary>
     IAsyncEnumerable<AdUserDto> SearchAllUsersAsync(CancellationToken ct);
+
+    /// <summary>
+    /// OnDemand mode: bind with user credentials (UPN format), then search for own attributes.
+    /// Returns Valid + AdUserDto on success, Invalid on bad credentials, Unreachable on errors.
+    /// </summary>
+    Task<OnDemandLoginResult> BindAndSearchSelfAsync(
+        string username, string domain, string password, CancellationToken ct);
 }

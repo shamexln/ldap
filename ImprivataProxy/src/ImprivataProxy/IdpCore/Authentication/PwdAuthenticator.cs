@@ -2,6 +2,7 @@ using ImprivataProxy.Configuration;
 using ImprivataProxy.Facades.Imprivata;
 using ImprivataProxy.IdpCore.Tokens;
 using ImprivataProxy.Shared.Contracts;
+using ImprivataProxy.Sources.ActiveDirectory;
 using ImprivataProxy.Sources.Contracts;
 using ImprivataProxy.Sources.Local.Entities;
 using Microsoft.Extensions.Options;
@@ -12,30 +13,36 @@ public class PwdAuthenticator : IPwdAuthenticator
 {
     private readonly IUserStore _users;
     private readonly IRemotePasswordVerifier _remote;
+    private readonly ILdapClient _ldap;
     private readonly IPasswordHasher _hasher;
     private readonly ILockoutPolicy _lockout;
     private readonly ITicketIssuer _tickets;
     private readonly IAuditSink _audit;
     private readonly AuthPolicyConfig _policy;
+    private readonly AdConfig _adConfig;
     private readonly ILogger<PwdAuthenticator> _logger;
 
     public PwdAuthenticator(
         IUserStore users,
         IRemotePasswordVerifier remote,
+        ILdapClient ldap,
         IPasswordHasher hasher,
         ILockoutPolicy lockout,
         ITicketIssuer tickets,
         IAuditSink audit,
         IOptions<AuthPolicyConfig> policy,
+        IOptions<AdConfig> adConfig,
         ILogger<PwdAuthenticator> logger)
     {
         _users = users;
         _remote = remote;
+        _ldap = ldap;
         _hasher = hasher;
         _lockout = lockout;
         _tickets = tickets;
         _audit = audit;
         _policy = policy.Value;
+        _adConfig = adConfig.Value;
         _logger = logger;
     }
 
@@ -51,9 +58,43 @@ public class PwdAuthenticator : IPwdAuthenticator
         }
 
         var user = await _users.FindEnabledForLoginAsync(username, domain, ct);
+        if (user is null && IsOnDemandMode())
+        {
+            var onDemand = await _ldap.BindAndSearchSelfAsync(username, domain, password, ct);
+            switch (onDemand.Outcome)
+            {
+                case RemoteVerifyOutcome.Valid when onDemand.User is not null:
+                    await _users.UpsertFromAdAsync(onDemand.User, ct);
+                    user = await _users.FindEnabledForLoginAsync(username, domain, ct);
+                    if (user is null)
+                    {
+                        await _audit.LogAsync("pwd_login_fail",
+                            username: username, domain: domain,
+                            detail: new { reason = "ondemand_upsert_failed" }, ct: ct);
+                        return new AuthResult.Failure(ReturnCodes.RtcInvalidCredentials, "invalid credentials");
+                    }
+                    var hash = _hasher.Hash(password);
+                    await _users.UpdatePwdHashAsync(user.Id, hash, ct);
+                    return await SucceedAsync(user, username, domain, "ondemand_first_login", ct);
+
+                case RemoteVerifyOutcome.Unreachable:
+                    _logger.LogError("OnDemand verifier unreachable for {Username}@{Domain}: {Diag}",
+                        username, domain, onDemand.Diagnostic);
+                    await _audit.LogAsync("pwd_login_error",
+                        username: username, domain: domain,
+                        detail: new { reason = "ondemand_unreachable", error = onDemand.Diagnostic }, ct: ct);
+                    return new AuthResult.Failure(ReturnCodes.RtcSystemError, "system error");
+
+                default:
+                    await _audit.LogAsync("pwd_login_fail",
+                        username: username, domain: domain,
+                        detail: new { reason = "ondemand_invalid" }, ct: ct);
+                    return new AuthResult.Failure(ReturnCodes.RtcInvalidCredentials, "invalid credentials");
+            }
+        }
+
         if (user is null)
         {
-            // Don't reveal whether the user exists.
             await _audit.LogAsync("pwd_login_fail",
                 username: username, domain: domain,
                 detail: new { reason = "user_not_found_or_disabled" }, ct: ct);
@@ -143,4 +184,7 @@ public class PwdAuthenticator : IPwdAuthenticator
         DistinguishedName: user.AdDistinguishedName,
         UserPrincipalName: null,             // not stored on User today; future schema extension
         ObjectGuid: user.AdObjectGuid);
+
+    private bool IsOnDemandMode() =>
+        string.Equals(_adConfig.Mode, "OnDemand", StringComparison.OrdinalIgnoreCase);
 }

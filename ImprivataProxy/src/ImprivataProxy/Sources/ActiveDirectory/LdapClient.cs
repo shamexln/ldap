@@ -115,6 +115,60 @@ public class LdapClient : ILdapClient, IRemotePasswordVerifier
         }
     }
 
+    public Task<OnDemandLoginResult> BindAndSearchSelfAsync(
+        string username, string domain, string password, CancellationToken ct)
+    {
+        return Task.Run(() =>
+        {
+            try
+            {
+                using var conn = OpenConnection(_config.BindTimeoutSeconds);
+                var upn = $"{username}@{domain}";
+                conn.Bind(new NetworkCredential(upn, password));
+
+                var request = new SearchRequest(
+                    _config.BaseDn,
+                    $"(&(objectClass=user)(sAMAccountName={EscapeLdapFilter(username)}))",
+                    SearchScope.Subtree,
+                    SyncAttributes);
+
+                var response = (SearchResponse)conn.SendRequest(request);
+                if (response.Entries.Count == 0)
+                {
+                    _logger.LogWarning("OnDemand bind succeeded but user entry not found: {Upn}", upn);
+                    return new OnDemandLoginResult(RemoteVerifyOutcome.Invalid, Diagnostic: "entry not found after bind");
+                }
+
+                var dto = TryMapEntry(response.Entries[0]);
+                if (dto is null)
+                {
+                    return new OnDemandLoginResult(RemoteVerifyOutcome.Invalid, Diagnostic: "failed to map entry");
+                }
+
+                return new OnDemandLoginResult(RemoteVerifyOutcome.Valid, dto);
+            }
+            catch (LdapException ex) when (ex.ErrorCode == LdapInvalidCredentials)
+            {
+                return new OnDemandLoginResult(RemoteVerifyOutcome.Invalid);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "OnDemand bind failed for {Username}@{Domain}", username, domain);
+                return new OnDemandLoginResult(RemoteVerifyOutcome.Unreachable, Diagnostic: ex.Message);
+            }
+        }, ct);
+    }
+
+    private static string EscapeLdapFilter(string input)
+    {
+        return input
+            .Replace("\\", "\\5c")
+            .Replace("*", "\\2a")
+            .Replace("(", "\\28")
+            .Replace(")", "\\29")
+            .Replace("\0", "\\00");
+    }
+
     private LdapConnection OpenConnection(int timeoutSeconds)
     {
         var uri = new Uri(_config.LdapUrl);

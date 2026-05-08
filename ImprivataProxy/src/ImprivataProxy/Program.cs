@@ -62,8 +62,12 @@ builder.Services.AddSingleton<IRemotePasswordVerifier>(
 builder.Services.AddScoped<AdSyncRunner>();
 // ADR-0002 §4.1: expose AdSyncRunner also as IUserDirectorySync (future SCIM swap point).
 builder.Services.AddScoped<IUserDirectorySync>(sp => sp.GetRequiredService<AdSyncRunner>());
-builder.Services.AddSingleton<AdSyncService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<AdSyncService>());
+var adMode = builder.Configuration.GetValue<string>("Ad:Mode") ?? "Sync";
+if (string.Equals(adMode, "Sync", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddSingleton<AdSyncService>();
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<AdSyncService>());
+}
 
 // ===================================================================
 // IdpCore (protocol-agnostic authentication policy)
