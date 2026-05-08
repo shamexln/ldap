@@ -10,4 +10,5 @@ public class AdConfig
     public int BindTimeoutSeconds { get; set; } = 10;
     public int SearchTimeoutSeconds { get; set; } = 30;
     public int PageSize { get; set; } = 1000;
+    public bool SkipCertValidation { get; set; } = false;
 }

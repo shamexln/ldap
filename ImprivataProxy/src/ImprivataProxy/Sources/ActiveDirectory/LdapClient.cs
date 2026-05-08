@@ -128,6 +128,10 @@ public class LdapClient : ILdapClient, IRemotePasswordVerifier
 
         if (uri.Scheme.Equals("ldaps", StringComparison.OrdinalIgnoreCase))
         {
+            if (_config.SkipCertValidation)
+            {
+                conn.SessionOptions.VerifyServerCertificate = (_, _) => true;
+            }
             conn.SessionOptions.SecureSocketLayer = true;
         }
 
