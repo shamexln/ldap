@@ -3308,3 +3308,28 @@ private static string? GetReverseDomain(AuthResult result, ProxyConfig config)
 - **Gateway 端到端 PWD 认证**:设备 → Gateway → Proxy → AD → 成功
 - **Credential Failure 格式**:匹配真实 Imprivata disp="2"(待重启验证)
 - **待验证**:UID 刷卡 + credential failure 实机测试
+
+---
+
+## 👤 用户
+
+实现双模式 LDAP 认证(Sync + OnDemand 按需自注册)。OnDemand 模式下用户首次密码登录时用 UPN bind AD 验证并自动创建本地记录,无需服务账户。
+
+---
+
+## 🤖 助手
+
+双模式 LDAP 认证实现完成(2026-05-08)。改动 7 文件:
+
+**核心实现**:
+1. `Configuration/AdConfig.cs` — 新增 `Mode` 字段(`"Sync"` / `"OnDemand"`)
+2. `Sources/ActiveDirectory/OnDemandLoginResult.cs` — 新建 sealed record(三态:Valid+AdUserDto / Invalid / Unreachable)
+3. `Sources/Contracts/ILdapClient.cs` — 新增 `BindAndSearchSelfAsync` 方法签名
+4. `Sources/ActiveDirectory/LdapClient.cs` — 实现 UPN bind + self-search + `EscapeLdapFilter`(防 LDAP 注入)
+5. `IdpCore/Authentication/PwdAuthenticator.cs` — OnDemand 分支:user not found + OnDemand → bind+search → upsert → 签 ticket
+6. `Program.cs` — 条件 DI:仅 `Mode=Sync` 时注册 AdSyncService
+7. `Facades/Admin/SyncController.cs` — nullable `AdSyncService?` 注入,OnDemand 模式返回 404
+
+**验证**:`dotnet build` 0 warnings / 0 errors。OnDemand 分支覆盖 Valid / Invalid / Unreachable 三态。
+
+**文档同步更新**:CHANGELOG.md、adr-0002-phase-ab-implementation.md、adr-0002-idp-architecture.md、LDAP.md、session_conversation.md

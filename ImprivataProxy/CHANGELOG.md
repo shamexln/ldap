@@ -1,6 +1,6 @@
 # Changelog
 
-> **Last updated**: 2026-05-05
+> **Last updated**: 2026-05-08
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范,
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
@@ -26,6 +26,14 @@
 
 ### Added
 
+- **双模式 LDAP 认证(Sync + OnDemand)**:
+  - `AdConfig.Mode` 字段:`"Sync"`(默认,服务账户全量同步)或 `"OnDemand"`(用户首次登录自注册)
+  - `ILdapClient.BindAndSearchSelfAsync` —— OnDemand 模式:用户凭据 UPN bind → 搜索自身属性 → 返回 `OnDemandLoginResult`
+  - `OnDemandLoginResult` sealed record(三态:`Valid` + `AdUserDto` / `Invalid` / `Unreachable`)
+  - `PwdAuthenticator` OnDemand 分支:用户不存在 + OnDemand 模式 → bind+search → upsert → 签 ticket
+  - `AdSyncService` 条件注册:Mode=OnDemand 时不启动后台同步服务
+  - `SyncController` 适配:注入 nullable `AdSyncService?`,OnDemand 模式返回 404
+  - LDAP filter escaping(`EscapeLdapFilter`):防注入,处理 `\*()` 和 NUL 5 个特殊字符
 - **`Sources/Contracts/IRemotePasswordVerifier`**:抽象"问外部身份源这个密码对不对"的能力
   - 三态结果 `RemoteVerifyOutcome { Valid, Invalid, Unreachable }`
   - `LdapClient` 适配实现;未来可平行加 SAML ECP / OIDC ROPC 实现
@@ -80,6 +88,7 @@
 - `dotnet clean && dotnet build` —— 0 warnings, 0 errors
 - `dotnet test` —— **227 / 227 passed, 0 failed**(含 11 条 ArchUnit 架构规则)
 - 反模式 grep(ADR-0002 §8):§8.1 / §8.2 / §8.3 / §8.4 全部零违规
+- OnDemand 模式:编译通过,`PwdAuthenticator` 新增分支逻辑已覆盖 Valid / Invalid / Unreachable 三态
 
 ### Refs
 

@@ -567,6 +567,42 @@ foreach (u in stale) u.Enabled = false;
 - `PATCH /admin/users/{id}/pin` → 设 `pin_hash`
 - sync 跑不跑都不影响
 
+### 5.9 OnDemand 模式(按需自注册)
+
+配置 `Ad:Mode = "OnDemand"` 时,系统不启动后台同步服务,也不需要服务账户。用户在首次密码登录时自动注册:
+
+```
+用户输入: username + domain + password
+    │
+    ├─ 1. FindEnabledForLoginAsync(username, domain) → 本地查找
+    │     ├─ 找到 → 走现有逻辑(本地 hash / bind fallback)
+    │     └─ 未找到 + Mode=OnDemand ↓
+    │
+    ├─ 2. BindAndSearchSelfAsync(username, domain, password)
+    │     conn.Bind(username@domain, password)     ← UPN 格式
+    │     ├─ 失败(code 49) → return "invalid credentials"
+    │     ├─ 网络/超时异常 → return "system error"(不累计 lockout)
+    │     └─ 成功 ↓
+    │
+    ├─ 3. 搜索自身属性
+    │     filter: (&(objectClass=user)(sAMAccountName={escaped_username}))
+    │     获取: DN, displayName, mail, memberOf, objectGUID, userAccountControl
+    │     ├─ 未找到 → return "invalid credentials"
+    │     └─ 找到 ↓
+    │
+    ├─ 4. UpsertFromAdAsync(adUser) → 创建/更新本地用户记录
+    │     缓存密码 hash(argon2)
+    │
+    └─ 5. return Success(签发 ticket,path="ondemand_first_login")
+```
+
+**设计要点**:
+- **无需服务账户**:用户用自己的 UPN(`username@domain`)bind,AD 默认允许读取自身属性
+- **LDAP filter escaping**:防止用户名注入(`EscapeLdapFilter` 转义 `\*()` + NUL)
+- **条件 DI**:`Program.cs` 仅 `Mode=Sync` 时注册 `AdSyncService`;OnDemand 模式 `SyncController` 返回 404
+- **向后兼容**:默认 `Mode=Sync`,现有部署无需改配置
+- **后续登录**:用户已存在于本地 DB → 走现有 local hash / bind fallback 逻辑,和 Sync 模式完全一致
+
 ---
 
 ## 6. OStick JWT Ticket
@@ -704,6 +740,7 @@ ImprivataProxy/
     "ConnectionString": "Data Source=./data/proxy.db"
   },
   "Ad": {
+    "Mode": "Sync",
     "LdapUrl": "ldaps://dc.corp.example.com:636",
     "BaseDn": "OU=Users,DC=corp,DC=example,DC=com",
     "ServiceAccountDn": "CN=svc-imprivata,OU=Service,DC=corp,DC=example,DC=com",
@@ -761,6 +798,12 @@ AD 查询异常绝不触发扫尾禁用——否则一次网络抖动会把所�
 ### 9.5 SQLite 起步
 
 小规模部署用 SQLite 足够;Schema 设计兼容 PostgreSQL,需要扩展时只要改 `AddDbContext` 的 provider。
+
+### 9.6 双模式 LDAP(Sync vs OnDemand)
+
+- **Sync**:需要服务账户(只读权限),定期全量扫描 AD → 本地全量用户 → 即时可用。适合用户数可枚举、需要"扫尾禁用"(AD 删除/禁用联动)的场景。
+- **OnDemand**:无需服务账户,用户首次登录自注册。适合不方便申请服务账户、或 AD 用户量大但实际登录人少的场景。代价是放弃了"扫尾禁用"能力——AD 侧禁用用户后,已注册用户的本地 `enabled` 不会自动同步(需手动 Admin 操作或引入轻量级 check)。
+- 两种模式通过 `Ad:Mode` 配置切换,`Program.cs` 条件注册 DI,运行时行为互斥。
 
 ---
 

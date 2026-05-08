@@ -1,15 +1,15 @@
 # ADR-0002 Phase α + β + 后续演进实施记录(归档)
 
 - **起始**: 2026-05-04
-- **最后更新**: 2026-05-06
-- **当前状态**: ✅ ADR-0002 §3 / §5 / §8 全部达标;§4 契约 **11 实现 / 2 有意延期 = 13 项**(阶段达标);IdpCore 去 AD 化完成;Gateway 集成联调通过
+- **最后更新**: 2026-05-08
+- **当前状态**: ✅ ADR-0002 §3 / §5 / §8 全部达标;§4 契约 **11 实现 / 2 有意延期 = 13 项**(阶段达标);IdpCore 去 AD 化完成;Gateway 集成联调通过;双模式 LDAP 认证(Sync + OnDemand)落地
 - **测试**: **227 / 227 passed**(216 单元+集成 + 11 ArchUnit 架构规则)
 - **相关文档**: [adr-0002-idp-architecture.md](./adr-0002-idp-architecture.md) / [adr-0001-adsync-vs-saml.md](./adr-0001-adsync-vs-saml.md)
 - **GitHub**: [github.com/shamexln/ldap](https://github.com/shamexln/ldap) `main` 分支
 
 ---
 
-## 成就一览(15 个 commit 从 scaffold 到 Gateway 集成联调)
+## 成就一览(16 个 commit 从 scaffold 到双模式 LDAP 认证)
 
 ### 初始建仓(Phase α + β 保守版)—— 4 commits
 
@@ -22,7 +22,7 @@
 
 **初始状态**:Phase α + β(保守版)完成,§5 各层 Contracts/ 仅 `Sources/`,§8.2/§8.3 有遗留。
 
-### 后续推进(§5 + §8 收尾 + §4 契约深化 + IdpCore 去 AD 化 + Gateway 联调)—— 12 commits
+### 后续推进(§5 + §8 收尾 + §4 契约深化 + IdpCore 去 AD 化 + Gateway 联调 + 双模式 LDAP)—— 13 commits
 
 | # | Commit | 主题 | ADR 章节 |
 |:-:|--------|------|---------|
@@ -38,6 +38,7 @@
 | 10 | `4fcfe0a` | docs: annotate adr-0002-phase-ab-implementation.md with commit hashes | 实施记录加 38 处 commit hash 回链 |
 | 11 | `b7ae53c` | refactor: de-AD-ify IRemotePasswordVerifier — introduce UserIdentity, wire PwdAuthenticator through the verifier | §4.1 去 AD 化:UserIdentity 中立模型 + PwdAuthenticator 不再依赖 ILdapClient + ArchUnit 新规则 |
 | 12 | `19febd2` | feat: Gateway integration — match real Imprivata ProveID response formats | Gateway 联调:Domains 格式 + 空 domain + reverse mapping + Credential Failure disp="2" |
+| 13 | *(wip)* | feat: dual-mode LDAP authentication (Sync + OnDemand) | 双模式 LDAP:OnDemand 自注册 + 条件 DI + filter escaping |
 
 ### §4 完整契约进度
 
@@ -576,6 +577,41 @@ dotnet clean && dotnet build && dotnet test     # Passed: 216
 - 设备端 PWD 登录(shaolei/Draeger123)→ 认证成功,Gateway 回传 session
 - 密码错误 → `disp="2"` + 用户信息(待验证)
 - 用户不存在 → `disp="4"`(不泄漏信息)
+
+---
+
+### 13. *(wip)* — 双模式 LDAP 认证(Sync + OnDemand)
+
+**背景**:现有系统要求部署服务账户定期全量同步 AD 用户才能登录。新增 **OnDemand 模式**:无需服务账户,用户首次密码登录时系统用其凭据直接 UPN bind AD → 成功后自动创建本地记录 → Admin 再分配卡/PIN。两种模式通过 `Ad:Mode` 配置切换,默认 `"Sync"`,向后兼容。
+
+**做了什么**:
+
+**13a. 配置扩展**:
+- `AdConfig.Mode` 字段:`"Sync"`(默认)或 `"OnDemand"`
+- `appsettings.json` 添加 `"Mode": "Sync"` 到 `Ad` 节
+
+**13b. `ILdapClient.BindAndSearchSelfAsync`**:
+- 新增接口方法:用户凭据 UPN bind(`username@domain`) → 搜索自身属性 → 返回 `OnDemandLoginResult`
+- `OnDemandLoginResult` sealed record:三态 `Valid`(含 `AdUserDto`)/ `Invalid` / `Unreachable`
+- `LdapClient` 实现:UPN bind → `(&(objectClass=user)(sAMAccountName={escaped}))` → `TryMapEntry`
+- **LDAP filter escaping**(`EscapeLdapFilter`):防注入,处理 `\*()` 和 NUL 5 个特殊字符
+
+**13c. `PwdAuthenticator` OnDemand 分支**:
+- 在 `user is null` 处检测 OnDemand 模式
+- `BindAndSearchSelfAsync` → 三态处理:
+  - `Valid` → `UpsertFromAdAsync` + 缓存密码 hash + 签发 ticket(path=`"ondemand_first_login"`)
+  - `Invalid` → 返回 `RtcInvalidCredentials`
+  - `Unreachable` → 返回 `RtcSystemError`(不累计 lockout)
+- 新注入:`ILdapClient` + `IOptions<AdConfig>`
+
+**13d. 条件 DI + SyncController 适配**:
+- `Program.cs`:仅 `Mode=Sync` 时注册 `AdSyncService` + `AddHostedService`
+- `SyncController`:nullable `AdSyncService?` 注入,OnDemand 模式返回 404
+
+**验证结果**:
+- `dotnet build` —— 0 warnings, 0 errors
+- OnDemand 分支逻辑覆盖 Valid / Invalid / Unreachable 三态
+- Sync 模式行为不变(回归安全)
 
 ---
 

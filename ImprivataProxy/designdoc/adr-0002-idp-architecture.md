@@ -622,7 +622,7 @@ app.Run();
 
 ---
 
-## 附录 B:实施状态(Phase α + β,保守版,2026-05-04)
+## 附录 B:实施状态(Phase α + β + 后续演进,2026-05-08)
 
 本附录记录本 ADR 的 ADR-0002 §6 Phase α(保守版)+ Phase β 已在 2026-05-04 执行的成果与遗留。
 **完整实施过程、原始 plan、命令序列、下一步路线图**见独立文件:
@@ -630,7 +630,7 @@ app.Run();
 
 [项目根 CHANGELOG.md](../CHANGELOG.md) 也记录了本次变更的摘要。
 
-### 状态卡片(2026-05-04 更新)
+### 状态卡片(2026-05-08 更新)
 
 | 维度 | 状态 | 备注 |
 |------|:----:|------|
@@ -653,6 +653,7 @@ app.Run();
 | §8.3 反模式 | ✅ | 零违规(PwdOrPin 搬到 Shared/Contracts)+ ArchUnit CI 保护 |
 | §8.4 反模式 | ✅ | 零违规 + ArchUnit CI 保护 |
 | IdpCore 不依赖 AD 特定 `ILdapClient` | ✅ | ArchUnit 规则 `IdpCore_Should_Not_Depend_On_ILdapClient` 持续保护 |
+| 双模式 LDAP 认证(Sync + OnDemand) | ✅ | `AdConfig.Mode` 切换;OnDemand:UPN bind + self-search + upsert;条件 DI;LDAP filter escaping |
 | Phase γ ArchUnitNET | ✅ | **11** 条架构规则,227/227 tests 全绿 |
 | 编译 & 测试 | ✅ | 227/227,0 warning / 0 error |
 
@@ -690,3 +691,6 @@ app.Run();
 7. ✅ `IProtocolFacade` 自注册
 8. ✅ `ILockoutPolicy` 抽出
 9. ✅ Phase γ:ArchUnitNET 架构测试
+10. ✅ IdpCore 去 AD 化(`UserIdentity` + `IRemotePasswordVerifier` 中立化)
+11. ✅ Gateway 集成联调(Domains 格式 + Credential Failure)
+12. ✅ 双模式 LDAP 认证(Sync + OnDemand 按需自注册)
