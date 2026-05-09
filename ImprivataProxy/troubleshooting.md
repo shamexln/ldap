@@ -213,3 +213,214 @@ $PSVersionTable.PSVersion
 | appsettings.json LdapUrl | `ldaps://sso.ad.vista.com:636` | 手动编辑或安装时指定 |
 
 任何一个不一致都会导致 TLS 证书验证失败（除非 `SkipCertValidation: true`）。
+
+---
+
+## LDAPS 部署脚本使用指南
+
+### Setup-DC-LDAPS.ps1（在域控服务器上执行）
+
+此脚本在域控上生成自签名证书并启用 LDAPS。
+
+**前置条件**：
+- 必须在域控服务器上以管理员身份运行
+- 域控已安装 AD DS 角色
+
+**基本用法**：
+```powershell
+powershell -ExecutionPolicy Bypass -File "D:\project\ldap\ImprivataProxy\installer\Setup-DC-LDAPS.ps1" -DnsName "ldaps.chrliege.be"
+```
+
+**参数说明**：
+
+| 参数 | 必需 | 默认值 | 说明 |
+|------|------|--------|------|
+| `-DnsName` | 是 | — | 客户端连接时使用的 FQDN |
+| `-ValidYears` | 否 | 5 | 证书有效期（年） |
+| `-NoDcHostName` | 否 | — | 不将 DC 主机名加入证书 SAN |
+
+**示例**：
+```powershell
+# 标准用法
+.\Setup-DC-LDAPS.ps1 -DnsName "ldaps.chrliege.be"
+
+# 指定有效期 10 年
+.\Setup-DC-LDAPS.ps1 -DnsName "ldaps.chrliege.be" -ValidYears 10
+
+# 不加 DC 主机名到 SAN
+.\Setup-DC-LDAPS.ps1 -DnsName "ldaps.chrliege.be" -NoDcHostName
+```
+
+**执行步骤**（脚本自动完成）：
+1. 检测 DC 主机名，构建证书 SAN 列表
+2. 生成自签名证书（RSA 2048, SHA256, SChannel Provider）
+3. 添加证书到受信任根存储
+4. 导出 `.cer` 文件供客户端使用
+5. 重启 NTDS 服务加载新证书
+6. 验证 LDAPS 连接（127.0.0.1:636）
+
+**输出文件**：脚本目录下生成 `<DnsName>.cer`，需拷贝到 ImprivataProxy 主机。
+
+---
+
+### Setup-Client-LDAPS.ps1（在 ImprivataProxy 主机上执行）
+
+此脚本在 ImprivataProxy 主机上导入域控证书并验证 LDAPS 连通性。
+
+**前置条件**：
+- 已从域控拷贝 `.cer` 证书文件到本机
+- 能通过网络访问域控的 636 端口
+- DNS 能解析域控主机名（或已添加 hosts 记录）
+
+**基本用法**：
+```powershell
+powershell -ExecutionPolicy Bypass -File "D:\project\ldap\ImprivataProxy\installer\Setup-Client-LDAPS.ps1" -CertFile "C:\ldaps.chrliege.be.cer" -LdapHost "ldaps.chrliege.be"
+```
+
+**参数说明**：
+
+| 参数 | 必需 | 默认值 | 说明 |
+|------|------|--------|------|
+| `-CertFile` | 是 | — | 域控导出的 `.cer` 证书文件路径 |
+| `-LdapHost` | 是 | — | 域控 FQDN（必须与证书 DnsName 匹配） |
+| `-LdapPort` | 否 | 636 | LDAPS 端口 |
+
+**示例**：
+```powershell
+# 标准用法
+.\Setup-Client-LDAPS.ps1 -CertFile "C:\ldaps.chrliege.be.cer" -LdapHost "ldaps.chrliege.be"
+
+# 指定非标准端口
+.\Setup-Client-LDAPS.ps1 -CertFile "C:\ldaps.chrliege.be.cer" -LdapHost "ldaps.chrliege.be" -LdapPort 6636
+```
+
+**执行步骤**（脚本自动完成）：
+1. 检查 DNS 解析目标主机名
+2. 验证证书文件存在
+3. 导入证书到受信任根存储
+4. 验证 LDAPS 连接（TLS 握手）
+
+---
+
+## 前端管理界面登录失败
+
+### 现象
+
+前端页面输入 admin 密码后提示 "Invalid credentials"，或一直跳回登录页。
+
+服务日志显示：
+```
+[ERR] Admin password env var 'ADMIN_PASSWORD' not set; rejecting all admin requests
+AuthenticationScheme: Admin was challenged.
+<< 401 for GET /admin/users
+```
+
+### 原因
+
+ImprivataProxy 以 Windows 服务运行时，**不会继承**系统级环境变量。服务进程只能读取注册表中配置在该服务下的环境变量。
+
+需要设置的环境变量：
+
+| 环境变量 | 用途 |
+|----------|------|
+| `AD_SVC_PASSWORD` | LDAP 服务账号密码（AD 同步用） |
+| `ADMIN_PASSWORD` | 前端管理界面登录密码 |
+
+### 修复
+
+```powershell
+# 停止服务
+Stop-Service ImprivataProxy
+
+# 在注册表中设置服务环境变量（两个都要设置！）
+$regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\ImprivataProxy"
+Set-ItemProperty -Path $regPath -Name "Environment" -Value @(
+    "AD_SVC_PASSWORD=Draeger123!",
+    "ADMIN_PASSWORD=admin123"
+)
+
+# 启动服务
+Start-Service ImprivataProxy
+```
+
+### 验证
+
+前端登录使用：
+- 用户名：`admin`
+- 密码：上面设置的 `ADMIN_PASSWORD` 值（如 `admin123`）
+
+### 注意
+
+- 只设置系统环境变量（`[Environment]::SetEnvironmentVariable(..., "Machine")`）对服务**无效**
+- 必须通过注册表 `HKLM:\SYSTEM\CurrentControlSet\Services\<服务名>` 的 `Environment` 键值设置
+- 修改后需要重启服务才生效
+- 如果之后需要修改密码，重复上述步骤即可
+
+---
+
+## AD 同步凭据失败
+
+### 现象
+
+服务日志显示：
+```
+[WRN] LDAP bind failed for CN=xxx,DC=xxx: The supplied credential is invalid.
+```
+
+或：
+```
+Service account password env var 'AD_SVC_PASSWORD' not set
+```
+
+### 诊断
+
+1. **确认密码正确**（在域控上测试）：
+```powershell
+$cred = New-Object System.Net.NetworkCredential("CN=Compte fourni,OU=Readers,OU=Users,OU=Specific,OU=CITADELLE,DC=CHRLIEGE,DC=BE", "Draeger123!")
+$conn = New-Object System.DirectoryServices.Protocols.LdapConnection(New-Object System.DirectoryServices.Protocols.LdapDirectoryIdentifier("ldaps.chrliege.be", 636))
+$conn.SessionOptions.SecureSocketLayer = $true
+$conn.SessionOptions.VerifyServerCertificate = {$true}
+$conn.AuthType = [System.DirectoryServices.Protocols.AuthType]::Basic
+$conn.Bind($cred)
+Write-Host "Bind 成功"
+```
+
+2. **确认环境变量已注入服务**（见上方"前端管理界面登录失败"的修复方法）
+
+### 常见错误
+
+- 密码末尾少了特殊字符（如 `Draeger123` vs `Draeger123!`）
+- 只设置了系统环境变量，没有写入服务注册表
+- Service Account DN 拼写错误（注意空格、大小写）
+
+---
+
+## 完整部署流程速查
+
+```
+┌─────────────────────────────────────┐
+│         域控服务器 (DC)              │
+│                                     │
+│  1. 安装 AD DS 角色                 │
+│  2. 提升为域控 (Install-ADDSForest) │
+│  3. 创建 OU 和服务账号              │
+│  4. 运行 Setup-DC-LDAPS.ps1        │
+│  5. 拷贝 .cer 到客户端             │
+└─────────────────────────────────────┘
+                 │
+                 │ 拷贝 .cer 文件
+                 ▼
+┌─────────────────────────────────────┐
+│       ImprivataProxy 主机           │
+│                                     │
+│  1. 配置 DNS/hosts 解析域控名       │
+│  2. 运行 Setup-Client-LDAPS.ps1    │
+│  3. 安装 ImprivataProxy MSI        │
+│     填写: LDAP URL / BaseDN /      │
+│           ServiceAccountDN / Domain │
+│  4. 设置服务环境变量（注册表）      │
+│     AD_SVC_PASSWORD + ADMIN_PASSWORD│
+│  5. 重启服务                        │
+│  6. 访问 http://<IP>:80 登录管理页 │
+└─────────────────────────────────────┘
+```
