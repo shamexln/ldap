@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ImprivataProxy.Sources.Contracts;
 using ImprivataProxy.Sources.Local;
 using ImprivataProxy.Shared.Contracts;
@@ -34,8 +35,10 @@ public class UsersController : ControllerBase
         var rows = await _users.ListUsersAsync(search, enabled, take, ct);
         var items = rows.Select(u => new UserListItemDto(
             u.Id, u.Username, u.Domain, u.DisplayName,
+            u.GivenName, u.Sn,
             u.Enabled, u.PinHash != null, u.Cards.Count,
-            u.PwdLockedUntil, u.PinLockedUntil, u.LastSyncedAt))
+            u.PwdLockedUntil, u.PinLockedUntil, u.LastSyncedAt,
+            ParseGroups(u.AttributesJson)))
             .ToList();
 
         return Ok(items);
@@ -110,12 +113,46 @@ public class UsersController : ControllerBase
 
     private static UserDetailDto ToDetail(User u) => new(
         u.Id, u.Username, u.Domain, u.DisplayName,
+        u.GivenName, u.Sn,
+        ParseStringAttr(u.AttributesJson, "upn"),
         u.AdDistinguishedName, u.AdObjectGuid,
         u.Enabled, u.PinHash != null,
         u.PwdFailCount, u.PinFailCount,
         u.PwdLockedUntil, u.PinLockedUntil,
         u.PwdHashUpdatedAt, u.LastSyncedAt,
+        ParseGroups(u.AttributesJson),
         u.Cards.Select(c => new CardDto(
             c.Id, c.UserId, c.Label, c.CardUidLast4,
             c.IssuedAt, c.ExpiresAt, c.Revoked)).ToList());
+
+    private static IReadOnlyList<string>? ParseGroups(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("groups", out var arr) ||
+                arr.ValueKind != JsonValueKind.Array) return null;
+            return arr.EnumerateArray()
+                .Where(e => e.ValueKind == JsonValueKind.String)
+                .Select(e => e.GetString()!)
+                .Where(s => !string.IsNullOrEmpty(s))
+                .ToList();
+        }
+        catch { return null; }
+    }
+
+    private static string? ParseStringAttr(string? json, string key)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty(key, out var prop) &&
+                prop.ValueKind == JsonValueKind.String)
+                return prop.GetString();
+        }
+        catch { }
+        return null;
+    }
 }

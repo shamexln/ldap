@@ -20,4 +20,10 @@ public interface ILdapClient
     /// </summary>
     Task<OnDemandLoginResult> BindAndSearchSelfAsync(
         string username, string domain, string password, CancellationToken ct);
+
+    /// <summary>
+    /// Searches AD for a user by badge attribute value (e.g. employeeNumber).
+    /// Uses service account credentials. Returns null if not found.
+    /// </summary>
+    Task<AdUserDto?> SearchByBadgeAsync(string badgeValue, CancellationToken ct);
 }

@@ -13,6 +13,7 @@ using ImprivataProxy.Shared.Logging;
 using ImprivataProxy.Sources.ActiveDirectory;
 using ImprivataProxy.Sources.Contracts;
 using ImprivataProxy.Sources.Local;
+using ImprivataProxy.IdpCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 
@@ -77,7 +78,12 @@ builder.Services.AddSingleton<IPasswordHasher, PasswordHasher>();
 builder.Services.AddScoped<ILockoutPolicy, LockoutPolicy>();
 builder.Services.AddScoped<IAuthSessionStore, AuthSessionStore>();
 builder.Services.AddScoped<IPwdAuthenticator, PwdAuthenticator>();
-builder.Services.AddScoped<IUidAuthenticator, UidAuthenticator>();
+builder.Services.AddSingleton<GroupAuthorizationChecker>();
+var uidMode = builder.Configuration.GetValue<string>("Ad:UidMode") ?? "Badge";
+if (string.Equals(uidMode, "Badge", StringComparison.OrdinalIgnoreCase))
+    builder.Services.AddScoped<IUidAuthenticator, BadgeUidAuthenticator>();
+else
+    builder.Services.AddScoped<IUidAuthenticator, UidAuthenticator>();
 builder.Services.AddScoped<IPinAuthenticator, PinAuthenticator>();
 
 builder.Services.AddSingleton<ISigningKeyProvider, SigningKeyProvider>();

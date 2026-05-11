@@ -6,6 +6,8 @@ public sealed record AdUserDto(
     string Domain,
     string DistinguishedName,
     string? DisplayName,
+    string? GivenName,
+    string? Sn,
     string? Mail,
     IReadOnlyList<string> Groups,
     bool Enabled);

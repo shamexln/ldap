@@ -1,4 +1,10 @@
 @startuml architecture
+skinparam defaultFontName "Microsoft YaHei"
+skinparam titleFontName "Microsoft YaHei"
+skinparam packageFontName "Microsoft YaHei"
+skinparam componentFontName "Microsoft YaHei"
+skinparam classFontName "Microsoft YaHei"
+skinparam arrowFontName "Microsoft YaHei"
 !theme plain
 title Imprivata Proxy - 本地 IdP 架构
 
@@ -11,9 +17,11 @@ actor "Imprivata 客户端\n(EWS 等)" as Client
 package "ImprivataProxy (.NET 8)" as Proxy #E8F4F8 {
   component "Imprivata 协议端点\n(XML over HTTP)\n/sso/ProveIDWeb/v28/*" as Endpoints
   component "AuthEngine\n(PWD / UID / PIN)" as Auth
-  component "TicketIssuer\n(OStick JWT)" as Ticket
+  component "BadgeUidAuthenticator\n(NumBadge → 实时 AD 查询)" as BadgeAuth
+  component "GroupAuthorizationChecker\n(memberOf ∩ RequiredGroups)" as GroupCheck
+  component "TicketIssuer\n(OStick JWT + gvn/snm/upn)" as Ticket
   component "UserStore\n(EF Core)" as Store
-  component "LdapClient\n(bind + search)" as Ldap
+  component "LdapClient\n(bind + search + badge)" as Ldap
   component "AdSyncService\n(IHostedService, 每 30 min)" as Sync
   component "Admin REST API\n(/admin/*)" as Admin
   component "Serilog\n(日志 + 脱敏)" as Log
@@ -24,9 +32,14 @@ cloud "Active Directory\n域控 (LDAPS 636)" as AD
 
 Client --> Endpoints : HTTP
 Endpoints --> Auth
+Endpoints --> BadgeAuth : UidMode=Badge
 Auth --> Store : 查询/更新\npwd_hash / pin_hash /\nlockout 状态
 Auth --> Ldap : PWD bind fallback
 Auth --> Ticket : 发 JWT
+BadgeAuth --> Ldap : SearchByBadge\n(实时查询)
+BadgeAuth --> GroupCheck : 授权组检查
+BadgeAuth --> Store : UpsertFromAd
+BadgeAuth --> Ticket : 发 JWT
 Ticket --> Endpoints
 Endpoints --> Client : XML Response
 
@@ -37,9 +50,9 @@ Admin --> Store : 卡号 / PIN / 启用禁用
 Admin --> Sync : 手动触发
 
 Ldap --> AD : LDAPS 636\nbind + search
-
 Store --> DB
 Auth ..> Log
+BadgeAuth ..> Log
 Sync ..> Log
 Admin ..> Log
 

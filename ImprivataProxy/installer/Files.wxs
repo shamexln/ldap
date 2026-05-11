@@ -1095,31 +1095,31 @@
         <File Source="publish\wwwroot\assets\api-BxHizJe6.js" />
       </Component>
       <Component Id="comp_364" Guid="*" Subdirectory="wwwroot\assets">
-        <File Source="publish\wwwroot\assets\CardsView-DN5-OGKX.css" />
+        <File Source="publish\wwwroot\assets\CardsView-CMYciarw.js" />
       </Component>
       <Component Id="comp_365" Guid="*" Subdirectory="wwwroot\assets">
-        <File Source="publish\wwwroot\assets\CardsView-XnvuRV6c.js" />
+        <File Source="publish\wwwroot\assets\CardsView-DN5-OGKX.css" />
       </Component>
       <Component Id="comp_366" Guid="*" Subdirectory="wwwroot\assets">
         <File Source="publish\wwwroot\assets\index-BM2aFfUj.css" />
       </Component>
       <Component Id="comp_367" Guid="*" Subdirectory="wwwroot\assets">
-        <File Source="publish\wwwroot\assets\index-BQrbiRIb.js" />
+        <File Source="publish\wwwroot\assets\index-DCrkAhub.js" />
       </Component>
       <Component Id="comp_368" Guid="*" Subdirectory="wwwroot\assets">
         <File Source="publish\wwwroot\assets\LoginView-CLLg5OYn.css" />
       </Component>
       <Component Id="comp_369" Guid="*" Subdirectory="wwwroot\assets">
-        <File Source="publish\wwwroot\assets\LoginView-op-aErni.js" />
+        <File Source="publish\wwwroot\assets\LoginView-Crl8y4vJ.js" />
       </Component>
       <Component Id="comp_370" Guid="*" Subdirectory="wwwroot\assets">
-        <File Source="publish\wwwroot\assets\SyncView-DSF6cWn3.js" />
+        <File Source="publish\wwwroot\assets\SyncView-DIqQEQTz.js" />
       </Component>
       <Component Id="comp_371" Guid="*" Subdirectory="wwwroot\assets">
-        <File Source="publish\wwwroot\assets\UsersView-BB7IsWFw.js" />
+        <File Source="publish\wwwroot\assets\UsersView-Ck5K_u59.css" />
       </Component>
       <Component Id="comp_372" Guid="*" Subdirectory="wwwroot\assets">
-        <File Source="publish\wwwroot\assets\UsersView-BsBvsGYk.css" />
+        <File Source="publish\wwwroot\assets\UsersView-DyibXb48.js" />
       </Component>
       <Component Id="comp_373" Guid="*" Subdirectory="wwwroot\assets">
         <File Source="publish\wwwroot\assets\_plugin-vue_export-helper-DlAUqK2U.js" />

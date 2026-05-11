@@ -1,6 +1,6 @@
 # ImprivataProxy 设计文档 - 本地 IdP + AD 同步
 
-> **Last updated**: 2026-05-05
+> **Last updated**: 2026-05-09
 
 ## 1. 概述
 
@@ -31,7 +31,6 @@
 | Ticket | 透传 Imprivata OStick | 代理自签 JWT (OStick scheme) |
 
 > 📘 架构收敛的详细权衡、SAML 为何装不下刷卡/PIN 场景、以及未来可能切回 SAML 的扩展口,见决策记录 **[ADR-0001: AD LDAP 同步 vs SAML](./adr-0001-adsync-vs-saml.md)**。
->
 > 📗 把 Imprivata ProveID Web API 当作 IdP 看,代理采用 **Facade / Core / Source 三层架构**(可插拔协议前端 + 协议无关认证核心 + 可替换身份源),见决策记录 **[ADR-0002: IdP 架构范式](./adr-0002-idp-architecture.md)**。
 >
 > 📙 **架构演进(2026-05-04 起)**:在 ADR-0002 基础上完成 11 次后续 commit(§5 目录规整 + §8.1-§8.4 反模式全部消除 + §4.1 契约 11/13 达标 + Phase γ ArchUnit CI 保护 + IdpCore 去 AD 化),本文档下文的目录/接口细节(如 "`EfAuditLogger`"、"`ILdapClient.BindAsUserAsync`" 等)**已过时**;最新架构状态卡片 + 每次推进的 commit hash 见 **[ADR-0002 §附录 B](./adr-0002-idp-architecture.md)** 和 **[实施记录](./adr-0002-phase-ab-implementation.md)**。业务层面的**认证场景 / AD 同步策略 / 数据模型**(§1.4 - §6 主体)不变,仍以本文档为准。
@@ -48,11 +47,11 @@
 | 认证方案 | `Authorization: OStick ostick.ticket=<ticket>` |
 | 多步认证 | 通过 `ServerState` 不透明字符串维护状态 |
 | 认证方式(Imprivata 支持) | PWD(密码), UID(门禁卡), FP(指纹), PIN, PKI(证书), KRB(Kerberos), QnA, OTP |
-| **本项目支持的场景** | **PWD only, UID only, UID + PIN 三种** |
+| **本项目支持的场景** | **PWD only, Badge UID(实时 AD), CardHash UID, CardHash UID + PIN 四种** |
 
 ### 1.4 支持的认证场景
 
-代理**仅实现以下三种 Imprivata 认证场景**,其他(FP, PKI, KRB, QnA, OTP)不在范围内。
+代理**实现以下四种认证场景**,其他(FP, PKI, KRB, QnA, OTP)不在范围内。
 
 #### 场景 1: PWD only(仅密码认证)
 
@@ -83,7 +82,42 @@ POST /sso/ProveIDWeb/v28/AuthUser
 - bind 成功 → 重算 argon2 写回 `pwd_hash`(透明缓存)
 - 签 JWT OStick Ticket 返回
 
-#### 场景 2: UID only(仅门禁卡认证)
+#### 场景 2: Badge UID(NumBadge 实时 AD 查询认证)
+
+单步请求,客户端刷卡后发送 NumBadge(徽章号码):
+
+```xml
+POST /sso/ProveIDWeb/v28/AuthUser
+<Request>
+  <ModalityAuthInput modalityID="UID">
+    <AuthRequest>
+      <UniqueID>12345</UniqueID>
+    </AuthRequest>
+  </ModalityAuthInput>
+  <CreateAuthTicket>true</CreateAuthTicket>
+</Request>
+```
+
+**代理动作**（`Ad.UidMode = "Badge"` 时）:
+- NumBadge 值作为 `UniqueID` 传入
+- 使用服务账号绑定 AD,按可配属性（默认 `employeeNumber`）实时搜索用户
+- LDAP filter: `(&(objectCategory=person)(objectClass=user)(employeeNumber={NumBadge}))`
+- 未找到 → 认证失败
+- 用户在 AD 中 disabled → 认证失败
+- **服务端授权检查**: `user.memberOf ∩ RequiredGroups ≠ ∅`（组交集非空才放行）
+- 通过 → UpsertFromAd 保存/刷新本地 User → 签发 JWT Ticket
+- 不需要 PIN 二次验证
+
+**与场景 3 (CardHash UID) 的关系**:
+
+两者共用 `IUidAuthenticator` 接口和 `modalityID="UID"` 入口,通过 `Ad.UidMode` 配置切换 DI 注册:
+
+| 配置值 | 实现类 | 行为 |
+|--------|--------|------|
+| `"Badge"` (默认) | `BadgeUidAuthenticator` | NumBadge → 实时 AD 查询 + 授权组检查 |
+| `"CardHash"` | `UidAuthenticator` | CardUID → SHA-256 本地查找 |
+
+#### 场景 3: CardHash UID only(仅门禁卡本地认证)
 
 单步请求,客户端刷卡后发送卡号:
 
@@ -105,7 +139,7 @@ POST /sso/ProveIDWeb/v28/AuthUser
 - 找到对应 user 但配置要求 PIN → 返回 `ServerState` 进入多步流程(场景 3)
 - 日志中 `UniqueID` 自动脱敏
 
-#### 场景 3: UID + PIN(门禁卡 + PIN 组合,多步认证)
+#### 场景 4: CardHash UID + PIN(门禁卡 + PIN 组合,多步认证)
 
 **步骤 1** — 客户端先发送 UID(同场景 2)
 
@@ -210,7 +244,7 @@ POST /sso/ProveIDWeb/v28/AuthUser
 ```plantuml
 @startuml architecture
 !theme plain
-title Imprivata Proxy - 本地 IdP 架构
+title Imprivata Proxy - 三层架构 (ADR-0002)
 
 skinparam componentStyle rectangle
 skinparam backgroundColor white
@@ -219,34 +253,60 @@ skinparam shadowing false
 actor "Imprivata 客户端\n(EWS 等)" as Client
 
 package "ImprivataProxy (.NET 8)" as Proxy #E8F4F8 {
-  component "Imprivata 协议端点\n(XML over HTTP)" as Endpoints
-  component "AuthEngine\n(PWD / UID / PIN)" as Auth
-  component "TicketIssuer\n(OStick JWT)" as Ticket
-  component "UserStore\n(EF Core)" as Store
-  component "LdapClient\n(bind + search)" as Ldap
-  component "AdSyncService\n(IHostedService)" as Sync
-  component "Serilog\n(日志 + 脱敏)" as Log
-  database "SQLite\nusers / cards /\nsessions / audit" as DB
+
+  package "Facades (协议适配层)" as Facades #DCEEFB {
+    component "ImprivataFacade\n(XML over HTTP)" as Endpoints
+    component "AdminFacade\n(REST + Basic Auth)" as Admin
+  }
+
+  package "IdpCore (认证核心)" as Core #E8F8E8 {
+    component "PwdAuthenticator" as PwdAuth
+    component "UidAuthenticator\n(CardHash 模式)" as UidAuth
+    component "BadgeUidAuthenticator\n(Badge 模式, 实时 AD)" as BadgeAuth
+    component "PinAuthenticator" as PinAuth
+    component "GroupAuthorizationChecker" as GroupCheck
+    component "AuthSessionStore" as Session
+    component "JwtTicketIssuer\n(OStick + gvn/snm/upn)" as Ticket
+    component "LockoutPolicy" as Lockout
+  }
+
+  package "Sources (数据/身份源)" as Sources #FFF8E0 {
+    component "UserStore\n(EF Core + SQLite)" as Store
+    component "LdapClient\n(bind + search + badge)" as Ldap
+    component "AdSyncService\n(IHostedService)" as Sync
+    database "SQLite\nusers / cards /\nsessions / audit" as DB
+  }
 }
 
 cloud "Active Directory\n域控 (LDAPS 636)" as AD
 
 Client --> Endpoints : HTTP\n/sso/ProveIDWeb/v28/*
-Endpoints --> Auth
-Auth --> Store
-Auth --> Ldap : PWD bind fallback
-Auth --> Ticket
+Endpoints --> PwdAuth
+Endpoints --> UidAuth : UidMode=CardHash
+Endpoints --> BadgeAuth : UidMode=Badge
+Endpoints --> PinAuth
+PwdAuth --> Store
+PwdAuth --> Ldap : bind fallback\n(Sync + OnDemand)
+PwdAuth --> Ticket
+UidAuth --> Store
+UidAuth --> Ticket
+BadgeAuth --> Ldap : SearchByBadgeAsync\n(实时 AD 查询)
+BadgeAuth --> GroupCheck : 授权组检查
+BadgeAuth --> Store : UpsertFromAd
+BadgeAuth --> Ticket
+PinAuth --> Session
+PinAuth --> Ticket
 Ticket --> Endpoints
 Endpoints --> Client : XML Response
+
+Admin --> Store : 用户/卡管理
+Admin --> Sync : 手动触发
 
 Sync --> Ldap : 周期性搜索
 Sync --> Store : Upsert
 
 Ldap --> AD : LDAPS
-
 Store --> DB
-Auth ..> Log
-Sync ..> Log
 
 @enduml
 ```
@@ -258,7 +318,7 @@ Sync ..> Log
 ```plantuml
 @startuml pwd-flow
 !theme plain
-title PWD 认证流程 - 本地 argon2 + AD bind fallback
+title PWD 认证流程 - 本地 argon2 + AD bind fallback + OnDemand 自注册
 
 skinparam backgroundColor white
 skinparam shadowing false
@@ -274,10 +334,24 @@ participant "TicketIssuer" as T
 C -> E : POST /AuthUser (PWD)
 E -> A : Authenticate(user, domain, pwd)
 
-A -> DB : SELECT WHERE username=? AND domain=?
-DB --> A : user row
+A -> DB : FindEnabledForLogin(username, domain)
+DB --> A : user row (或 null)
 
-alt 用户不存在 / 禁用
+alt 用户不存在 且 OnDemand 模式
+  note right of A #FFFACD: OnDemand 自注册路径\n用户首次登录,本地无记录
+  A -> L : BindAndSearchSelf(user, domain, pwd)
+  L -> AD : LDAPS bind(user_dn, pwd)\n+ search 获取用户属性
+  AD --> L : bind result + user attributes
+  alt bind 成功 + 属性获取成功
+    A -> DB : UpsertFromAd(user_attributes)
+    A -> DB : UpdatePwdHash(argon2(pwd))
+    A -> T : IssueTicket(user)
+    T --> A : JWT
+    A --> E : Success + Ticket (path=ondemand_first_login)
+  else bind 失败 / AD 不可达
+    A --> E : Failure (rtc=1001 或 rtc=9999)
+  end
+else 用户不存在 (Sync 模式) / 禁用
   A --> E : Failure (disp=4, rtc=1001)
 else 锁定中
   A --> E : Failure (disp=4, rtc=1010)
@@ -286,31 +360,34 @@ else 有 pwd_hash 且未过 TTL
   alt 本地验证成功
     A -> T : IssueTicket(user)
     T --> A : JWT
-    A --> E : Success + Ticket
+    A --> E : Success + Ticket (path=local_hash)
   else 本地验证失败
     note right of A: hash 可能过期,走 fallback
-    A -> L : bind(user_dn, pwd)
+    A -> L : RemoteVerify(identity, pwd)
     L -> AD : LDAPS simple bind
     AD --> L : success / failure
     alt bind 成功
       A -> DB : UPDATE pwd_hash = argon2(pwd)
       A -> T : IssueTicket(user)
       T --> A : JWT
-      A --> E : Success + Ticket
+      A --> E : Success + Ticket (path=bind_fallback)
     else bind 失败
       A -> DB : pwd_fail_count++
       A --> E : Failure (disp=4, rtc=1001)
+    else AD 不可达
+      A --> E : Failure (rtc=9999, "system error")
     end
   end
-else 首次登录(pwd_hash = NULL)
-  A -> L : bind(user_dn, pwd)
+else 首次登录 (pwd_hash = NULL, Sync 模式)
+  A -> L : RemoteVerify(identity, pwd)
   L -> AD : LDAPS simple bind
   AD --> L : success / failure
   alt bind 成功
     A -> DB : UPDATE pwd_hash = argon2(pwd)
     A -> T : IssueTicket(user)
-    A --> E : Success + Ticket
+    A --> E : Success + Ticket (path=bind_fallback)
   else bind 失败
+    A -> DB : pwd_fail_count++
     A --> E : Failure
   end
 end
@@ -366,6 +443,52 @@ E -> C : XML Response
 @enduml
 ```
 
+### 3.4 Badge UID(NumBadge 实时 AD 查询)流程
+
+```plantuml
+@startuml badge-uid-flow
+!theme plain
+title Badge UID 实时 AD 认证
+
+skinparam backgroundColor white
+skinparam shadowing false
+
+participant "Client" as C
+participant "AuthUserEndpoint" as E
+participant "BadgeUidAuth" as B
+participant "LdapClient" as L
+participant "GroupChecker" as G
+database "Active Directory" as AD
+database "SQLite" as DB
+participant "TicketIssuer" as T
+
+C -> E : POST /AuthUser (UID=NumBadge)
+E -> B : Authenticate(numBadge)
+B -> L : SearchByBadgeAsync(numBadge)
+L -> AD : LDAP Search\n(&(objectClass=user)\n(employeeNumber={numBadge}))
+AD --> L : entry (or null)
+L --> B : AdUserDto?
+
+alt 用户未找到
+  B --> E : Failure (badge not found)
+else 账户已禁用
+  B --> E : Failure (account disabled)
+else 用户找到且启用
+  B -> G : IsAuthorized(groups, RequiredGroups)
+  alt 不在授权组
+    B --> E : Failure (unauthorized group)
+  else 授权通过
+    B -> DB : UpsertFromAdAsync(dto)
+    B -> T : Issue(user)
+    T --> B : JWT (gvn/snm/upn/grp)
+    B --> E : Success + Ticket
+  end
+end
+E -> C : XML Response
+
+@enduml
+```
+
 ---
 
 ## 4. 数据模型
@@ -382,6 +505,8 @@ CREATE TABLE users (
   ad_object_guid        TEXT UNIQUE,         -- AD objectGUID(同步主键)
   ad_distinguished_name TEXT,                -- 供 PWD bind fallback 使用
   display_name          TEXT,
+  given_name            TEXT,                -- AD givenName(名)
+  sn                    TEXT,                -- AD sn(姓)
   pwd_hash              TEXT,                -- argon2id,NULL=尚未 bootstrap
   pwd_hash_updated_at   DATETIME,            -- 用于 TTL 失效
   pin_hash              TEXT,                -- argon2id,NULL=该用户不要求 PIN
@@ -390,7 +515,7 @@ CREATE TABLE users (
   pwd_fail_count        INTEGER DEFAULT 0,
   pwd_locked_until      DATETIME,
   enabled               INTEGER DEFAULT 1,
-  attributes_json       TEXT,                -- 从 AD 缓存的 groups/dept 等
+  attributes_json       TEXT,                -- 从 AD 缓存的 groups/dept/upn 等
   last_synced_at        DATETIME,
   created_at            DATETIME,
   updated_at            DATETIME,
@@ -486,6 +611,8 @@ CREATE TABLE audit_log (
 | `userPrincipalName` | string | `users.domain`(`@` 后部分) | 空时从 DN 解析 domain 兜底 |
 | `distinguishedName` | string | `users.ad_distinguished_name` | 供 PWD bind fallback |
 | `displayName` | string | `users.display_name` | 可选 |
+| `givenName` | string | `users.given_name` | 名(用于 JWT `gvn` claim) |
+| `sn` | string | `users.sn` | 姓(用于 JWT `snm` claim) |
 | `mail` | string | `attributes_json.mail` | 可选 |
 | `memberOf` | string[] | `attributes_json.groups`(取 CN) | 多值属性 |
 | `userAccountControl` | int | `users.enabled` = `(uac & 0x0002) == 0` | 位 1 是 ACCOUNTDISABLE |
@@ -524,7 +651,7 @@ audit("ad_sync_completed", added, updated, disabled, duration)
 - `pwd_fail_count`, `pwd_locked_until`
 - `user_cards` 全表
 
-**sync 负责的字段**:username, domain, ad_distinguished_name, display_name, attributes_json, enabled(AD 禁用联动), last_synced_at
+**sync 负责的字段**:username, domain, ad_distinguished_name, display_name, given_name, sn, attributes_json, enabled(AD 禁用联动), last_synced_at
 
 ### 5.6 扫尾禁用
 
@@ -615,6 +742,9 @@ foreach (u in stale) u.Enabled = false;
     "sub": "user_id (GUID)",
     "usn": "username",
     "dom": "domain",
+    "gvn": "givenName",
+    "snm": "surname",
+    "upn": "user@domain.com",
     "grp": ["groups", "..."],
     "iat": 1735000000,
     "exp": 1735028800,
@@ -630,95 +760,117 @@ foreach (u in stale) u.Enabled = false;
 
 ## 7. 项目结构
 
-> 源文件: [diagrams/project-structure.puml](diagrams/project-structure.puml)
+> 按 ADR-0002 **Facade / IdpCore / Sources** 三层架构重组后的实际结构。
 
 ```
 ImprivataProxy/
 ├── ImprivataProxy.sln
-├── Dockerfile
-├── docker-compose.yml
 ├── src/ImprivataProxy/
 │   ├── Program.cs
 │   ├── appsettings.json
-│   ├── appsettings.Development.json
+│   │
 │   ├── Configuration/
-│   │   ├── ProxyConfig.cs                 (ListenAddress/Port)
-│   │   ├── AdConfig.cs                    (LDAP host, service account, OU, TLS)
+│   │   ├── ProxyConfig.cs                 (ListenAddress/Port/DefaultDomain/DomainMapping)
+│   │   ├── AdConfig.cs                    (Mode, LdapUrl, BaseDn, LoginAttribute, SkipCertValidation)
+│   │   ├── AdminConfig.cs                 (管理 API Basic Auth 凭据)
 │   │   ├── AuthPolicyConfig.cs            (lockout 阈值、hash TTL)
 │   │   ├── TicketConfig.cs                (signing key 路径、TTL)
-│   │   └── DatabaseConfig.cs              (SQLite 路径)
+│   │   └── DatabaseConfig.cs              (SQLite 连接串)
 │   │
-│   ├── Endpoints/                         (Imprivata 协议仿真)
-│   │   ├── ServersEndpoint.cs             (静态响应,返回代理自身)
-│   │   ├── DomainsEndpoint.cs             (从 users.domain DISTINCT)
-│   │   ├── ModalitiesEndpoint.cs          (静态:PWD, UID, PIN)
-│   │   ├── AuthUserEndpoint.cs            (POST 分派 + GET whoami + CANCEL 吊销)
-│   │   ├── NotImplementedEndpoint.cs      (兜底 501)
-│   │   ├── ImprivataXml.cs                (Request 解析 + Response 构建)
-│   │   └── ReturnCodes.cs                 (disp / rtc 常量)
+│   ├── Facades/                           ← 协议适配层 (ADR-0002 Facade)
+│   │   ├── Contracts/IProtocolFacade.cs
+│   │   ├── Imprivata/                     (Imprivata ProveID Web API 仿真)
+│   │   │   ├── ImprivataFacade.cs         (路由注册)
+│   │   │   ├── AuthUserEndpoint.cs        (POST 分派 + GET whoami + CANCEL 吊销)
+│   │   │   ├── ServersEndpoint.cs
+│   │   │   ├── DomainsEndpoint.cs
+│   │   │   ├── ModalitiesEndpoint.cs
+│   │   │   ├── NotImplementedEndpoint.cs  (兜底 501)
+│   │   │   ├── ImprivataXmlParser.cs      (Request XML 解析)
+│   │   │   ├── ImprivataXmlBuilder.cs     (Response XML 构建)
+│   │   │   ├── ReturnCodes.cs
+│   │   │   ├── OStickAuthenticationHandler.cs
+│   │   │   └── OStickHeader.cs
+│   │   └── Admin/                         (管理 REST API, Basic Auth)
+│   │       ├── AdminAuthenticationHandler.cs
+│   │       ├── BasicAuthParser.cs
+│   │       ├── UsersController.cs         (GET / PATCH enabled / reset PIN)
+│   │       ├── CardsController.cs         (POST 发卡 / DELETE 吊销)
+│   │       ├── SyncController.cs          (POST 手动触发 AD 同步)
+│   │       └── Dtos/
 │   │
-│   ├── Authentication/
-│   │   ├── IAuthEngine.cs
-│   │   ├── PwdAuthenticator.cs            (本地 argon2 + AD bind fallback)
-│   │   ├── UidAuthenticator.cs
-│   │   ├── PinAuthenticator.cs
-│   │   ├── AuthSessionStore.cs            (多步认证 ServerState)
-│   │   ├── LockoutPolicy.cs
-│   │   └── PasswordHasher.cs              (Argon2id 封装)
+│   ├── IdpCore/                           ← 协议无关认证核心 (ADR-0002 Core)
+│   │   ├── Authentication/
+│   │   │   ├── PwdAuthenticator.cs        (本地 argon2 + AD bind fallback + OnDemand)
+│   │   │   ├── UidAuthenticator.cs        (CardHash 模式: SHA-256 本地查找)
+│   │   │   ├── BadgeUidAuthenticator.cs   (Badge 模式: NumBadge → 实时 AD 查询)
+│   │   │   ├── PinAuthenticator.cs
+│   │   │   ├── LockoutPolicy.cs
+│   │   │   ├── PasswordHasher.cs          (Argon2id, OWASP 2024 参数)
+│   │   │   ├── CardHasher.cs              (SHA-256 卡号哈希)
+│   │   │   ├── AuthResult.cs
+│   │   │   └── Contracts/
+│   │   ├── Authorization/
+│   │   │   └── GroupAuthorizationChecker.cs (memberOf ∩ RequiredGroups 检查)
+│   │   ├── Sessions/
+│   │   │   ├── AuthSessionStore.cs        (多步认证 ServerState, 60s TTL)
+│   │   │   └── Contracts/
+│   │   ├── Tokens/
+│   │   │   ├── JwtTicketIssuer.cs
+│   │   │   ├── SigningKeyProvider.cs       (PEM 加载)
+│   │   │   ├── TicketBlacklistService.cs
+│   │   │   └── Contracts/
+│   │   └── Audit/
+│   │       └── AuditLogSink.cs
 │   │
-│   ├── Accounts/
-│   │   ├── Entities/                      (User, UserCard, AuthSession, TicketBlacklist, AuditLog)
-│   │   ├── AppDbContext.cs                (EF Core)
-│   │   ├── IUserStore.cs
-│   │   ├── UserStore.cs
-│   │   └── Migrations/                    (EF Migrations)
+│   ├── Sources/                           ← 可替换数据/身份源 (ADR-0002 Source)
+│   │   ├── Contracts/                     (IUserStore, IRemotePasswordVerifier, etc.)
+│   │   ├── ActiveDirectory/
+│   │   │   ├── ILdapClient.cs
+│   │   │   ├── LdapClient.cs             (System.DirectoryServices.Protocols)
+│   │   │   ├── AdSyncService.cs           (IHostedService, 周期同步)
+│   │   │   ├── AdSyncRunner.cs            (单次 sync 逻辑)
+│   │   │   ├── OnDemandLoginResult.cs     (OnDemand bind+search 结果)
+│   │   │   └── AdUserDto / DnParser / SyncResult / UacFlags
+│   │   └── Local/                         (EF Core + SQLite)
+│   │       ├── AppDbContext.cs
+│   │       ├── UserStore.cs
+│   │       ├── EfAuditStore / EfAuthSessionRepo / EfLockoutRepo / EfTicketBlacklistRepo
+│   │       ├── Entities/                  (User, UserCard, AuthSession, TicketBlacklistEntry, AuditLogEntry)
+│   │       └── Migrations/
 │   │
-│   ├── ActiveDirectory/
-│   │   ├── ILdapClient.cs
-│   │   ├── LdapClient.cs                  (System.DirectoryServices.Protocols)
-│   │   ├── AdSyncService.cs               (IHostedService,周期同步)
-│   │   ├── AdSyncRunner.cs                (单次 sync 逻辑)
-│   │   └── AdBindAuthenticator.cs         (PWD 的 fallback bind)
-│   │
-│   ├── Tickets/
-│   │   ├── ITicketIssuer.cs
-│   │   ├── JwtTicketIssuer.cs
-│   │   ├── OStickAuthenticationHandler.cs
-│   │   └── TicketBlacklistService.cs
-│   │
-│   ├── Admin/                             (最小管理 REST API)
-│   │   ├── UsersController.cs             (GET / PATCH enabled / reset PIN)
-│   │   ├── CardsController.cs             (POST 发卡 / DELETE 吊销)
-│   │   └── SyncController.cs              (POST 手动触发 AD 同步)
-│   │
-│   ├── Logging/
-│   │   └── LogSanitizer.cs                (脱敏 Password / PIN / UniqueID)
+│   ├── Shared/                            ← 横切关注点
+│   │   ├── Contracts/                     (IAuditSink, IClientContextProvider, PwdOrPin, UserIdentity)
+│   │   ├── Http/HttpClientContextProvider.cs
+│   │   ├── Logging/LogSanitizer.cs        (脱敏 Password / PIN / UniqueID)
+│   │   └── Xml/XmlHelper.cs
 │   │
 │   ├── Middleware/
-│   │   ├── RequestLoggingMiddleware.cs
-│   │   └── ResponseLoggingMiddleware.cs
+│   │   └── RequestLoggingMiddleware.cs
 │   │
-│   └── Xml/
-│       └── XmlHelper.cs                   (LINQ to XML 辅助)
+│   └── wwwroot/                           (Vue 3 前端 SPA 构建产物)
+│
+├── frontend/                              (Vue 3 管理前端源码)
+│   └── src/views/                         (LoginView, UsersView, CardsView, SyncView)
+│
+├── installer/                             (WiX v5 MSI 安装包)
+│   ├── Package.wxs
+│   ├── LdapConfigDlg.wxs                 (LDAP 连接配置对话框)
+│   ├── CredentialsDlg.wxs                (服务账户密码输入)
+│   └── Setup-DC-LDAPS.ps1                (DC 端启用 LDAPS 脚本)
 │
 ├── tests/ImprivataProxy.Tests/
-│   ├── PasswordHasherTests.cs
-│   ├── PwdAuthenticatorTests.cs
-│   ├── UidAuthenticatorTests.cs
-│   ├── PinAuthenticatorTests.cs
-│   ├── AdSyncRunnerTests.cs
-│   ├── ImprivataXmlTests.cs
-│   ├── TicketIssuerTests.cs
-│   ├── LogSanitizerTests.cs
-│   └── Helpers/
-│       └── MockLdapServer.cs
+│   ├── Unit/                              (25+ 测试文件, 见 §11.1)
+│   ├── Integration/                       (端到端集成测试)
+│   ├── Architecture/LayeringTests.cs      (ArchUnit 三层依赖保护)
+│   └── Helpers/                           (TestDbContext, MockLdap, etc.)
 │
 ├── designdoc/
-│   ├── LDAP.md
+│   ├── LDAP.md                            (本文档)
+│   ├── adr-0001-adsync-vs-saml.md
+│   ├── adr-0002-idp-architecture.md
+│   ├── adr-0002-phase-ab-implementation.md
 │   └── diagrams/
-│       ├── architecture.puml
-│       ├── pipeline.puml
-│       └── project-structure.puml
 │
 └── certs/
     └── ticket-signing.pem                 (生产环境用 DPAPI / KeyVault)
@@ -734,7 +886,11 @@ ImprivataProxy/
 {
   "Proxy": {
     "ListenAddress": "127.0.0.1",
-    "ListenPort": 80
+    "ListenPort": 80,
+    "DefaultDomain": "ad.example.com",
+    "DomainMapping": {
+      "onesign.online": "ad.example.com"
+    }
   },
   "Database": {
     "ConnectionString": "Data Source=./data/proxy.db"
@@ -742,13 +898,22 @@ ImprivataProxy/
   "Ad": {
     "Mode": "Sync",
     "LdapUrl": "ldaps://dc.corp.example.com:636",
-    "BaseDn": "OU=Users,DC=corp,DC=example,DC=com",
+    "BaseDn": "DC=corp,DC=example,DC=com",
+    "LoginAttribute": "sAMAccountName",
     "ServiceAccountDn": "CN=svc-imprivata,OU=Service,DC=corp,DC=example,DC=com",
     "ServiceAccountPasswordEnvVar": "AD_SVC_PASSWORD",
     "SyncIntervalMinutes": 30,
     "BindTimeoutSeconds": 10,
     "SearchTimeoutSeconds": 30,
-    "PageSize": 1000
+    "PageSize": 1000,
+    "SkipCertValidation": false,
+    "UidMode": "Badge",
+    "BadgeAttribute": "employeeNumber",
+    "RequiredGroups": [
+      "PRM_Infirmier_Moniteur",
+      "PRM_Aide_Soignant",
+      "PRM_Assistant_Logistique"
+    ]
   },
   "AuthPolicy": {
     "PwdMaxFails": 5,
@@ -762,15 +927,39 @@ ImprivataProxy/
     "SigningKeyPath": "./certs/ticket-signing.pem",
     "TtlHours": 8,
     "Issuer": "imprivata-proxy"
+  },
+  "Admin": {
+    "Username": "admin",
+    "PasswordEnvVar": "ADMIN_PASSWORD",
+    "Realm": "imprivata-proxy-admin"
+  },
+  "Serilog": {
+    "MinimumLevel": { "Default": "Information" },
+    "WriteTo": [
+      { "Name": "Console" },
+      { "Name": "File", "Args": { "path": "logs/proxy-.log", "rollingInterval": "Day" } }
+    ]
+  },
+  "Kestrel": {
+    "Endpoints": { "Http": { "Url": "http://0.0.0.0:80" } }
   }
 }
 ```
 
+**Badge 认证相关配置项说明**:
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `Ad:UidMode` | string | `"Badge"` | UID 认证策略: `"Badge"`=实时 AD 查询, `"CardHash"`=本地哈希查找 |
+| `Ad:BadgeAttribute` | string | `"employeeNumber"` | Badge 认证时查询的 AD 属性名 |
+| `Ad:RequiredGroups` | string[] | `[]` | 授权组列表(空=不检查,非空=用户 memberOf 至少匹配一个) |
+
 ### 8.2 敏感配置
 
 服务账号密码和 JWT 签名密钥**绝不写进 appsettings.json**:
-- 服务账号密码:环境变量 `AD_SVC_PASSWORD`(在 Systemd / Windows Service 配置里设置)
-- JWT 签名密钥:`certs/ticket-signing.pem` + Linux 文件权限 600 / Windows DPAPI 加密
+- 服务账号密码:环境变量 `AD_SVC_PASSWORD`(在 Windows Service 或 MSI 安装时设置)
+- 管理 API 密码:环境变量 `ADMIN_PASSWORD`(Admin REST API 的 Basic Auth 密码)
+- JWT 签名密钥:`certs/ticket-signing.pem` + Windows DPAPI 加密(或 Linux 文件权限 600)
 
 ---
 
@@ -805,6 +994,19 @@ AD 查询异常绝不触发扫尾禁用——否则一次网络抖动会把所�
 - **OnDemand**:无需服务账户,用户首次登录自注册。适合不方便申请服务账户、或 AD 用户量大但实际登录人少的场景。代价是放弃了"扫尾禁用"能力——AD 侧禁用用户后,已注册用户的本地 `enabled` 不会自动同步(需手动 Admin 操作或引入轻量级 check)。
 - 两种模式通过 `Ad:Mode` 配置切换,`Program.cs` 条件注册 DI,运行时行为互斥。
 
+### 9.7 Badge UID 策略模式(Badge vs CardHash)
+
+UID 认证采用策略模式,两种实现共存通过 `Ad:UidMode` 配置切换:
+
+- **Badge**(默认):读卡器获取 NumBadge → 实时 LDAP 查询 AD(`employeeNumber` 属性,可配置)→ 服务端授权检查(`memberOf ∩ RequiredGroups`)→ 签发 JWT。每次刷卡都查 AD,确保用户状态实时。
+- **CardHash**:读卡器获取卡 UID → SHA-256 哈希 → 本地 `user_cards` 表查找 → 需提前通过 Admin API 注册卡号。
+
+设计要点:
+1. **服务端强制授权**:`GroupAuthorizationChecker` 在签发 JWT 前检查用户组,`RequiredGroups` 为空时跳过检查(向后兼容)。
+2. **LDAP 过滤器转义**:`SearchByBadgeAsync` 使用 `EscapeLdapFilter()` 方法转义特殊字符(`\`, `*`, `(`, `)`, `\0`),防止 LDAP 注入。
+3. **Badge 认证即同步**:认证成功后调用 `UpsertFromAdAsync` 将用户写入本地 DB,相当于"实时增量同步",管理界面可见所有曾认证用户。
+4. **JWT 扩展属性**:Badge 路径签发的 JWT 包含 `gvn`(givenName)、`snm`(sn)、`upn`(userPrincipalName)额外 claims,EWS 客户端透明(不解析 JWT 内容)。
+
 ---
 
 ## 10. 部署方案
@@ -823,17 +1025,27 @@ $env:AD_SVC_PASSWORD="..."
 dotnet run --project src/ImprivataProxy
 ```
 
-**生产模式(Windows 服务)**:
+**生产模式(MSI 安装包, 推荐)**:
+```powershell
+# WiX v5 构建的 MSI 安装包, 包含 GUI 配置向导
+msiexec /i ImprivataProxy_1.0.0_x64_en-US.msi
+# 安装过程中会提示输入: LDAP URL, BaseDn, 服务账户DN, 密码
+# 自动注册 Windows Service 并启动
+```
+
+**生产模式(手动 Windows 服务)**:
 ```powershell
 sc.exe create "ImprivataProxy" binPath= "C:\Services\ImprivataProxy.exe"
 sc.exe config "ImprivataProxy" start= auto
-# 用 sc.exe 或 services.msc 设置环境变量 AD_SVC_PASSWORD
+# 用 sc.exe 或 services.msc 设置环境变量 AD_SVC_PASSWORD 和 ADMIN_PASSWORD
 sc.exe start "ImprivataProxy"
 ```
 
 ### 10.3 客户端配置
 
 将 Imprivata 客户端的服务器地址从 `https://sg.onesign.online` 改为 `http://127.0.0.1`(或代理的部署地址)。Imprivata 协议保持不变。
+
+> **DomainMapping**: 如果客户端发送的 domain 与 AD 实际域名不一致(如客户端发 `onesign.online` 但 AD 域是 `ad.vista.com`),在 `Proxy.DomainMapping` 中配置映射关系。`Proxy.DefaultDomain` 用于客户端未指定 domain 时的默认值。
 
 ### 10.4 AD 侧准备
 
@@ -849,13 +1061,26 @@ sc.exe start "ImprivataProxy"
 ### 11.1 单元测试(xUnit,`tests/ImprivataProxy.Tests/`)
 
 - `PasswordHasherTests` — argon2 round-trip、参数校验
-- `PwdAuthenticatorTests` — 本地命中 / 缺失 → bind fallback / hash 填充 / TTL 失效
+- `PwdAuthenticatorTests` — 本地命中 / 缺失 → bind fallback / hash 填充 / TTL 失效 / OnDemand 自注册
 - `UidAuthenticatorTests` — 卡找到/未找到 / 卡过期 / 卡吊销
 - `PinAuthenticatorTests` — 正确/错误/锁定/会话过期
 - `AuthSessionStoreTests` — ServerState 生成、过期清理
 - `AdSyncRunnerTests` — 首次 sync / 再次 sync 不覆盖 pwd_hash / disabled 用户处理 / bind 失败不扫尾
-- `ImprivataXmlTests` — AuthUserRequest 各模态解析 + Response 构建
-- `TicketIssuerTests` — 签发、验签、过期、黑名单
+- `CardHasherTests` — SHA-256 卡号哈希一致性
+- `ImprivataXmlParserTests` — AuthUserRequest 各模态解析
+- `ImprivataXmlBuilderTests` — Response XML 构建
+- `JwtTicketIssuerTests` — 签发、验签、过期、黑名单
+- `TicketBlacklistServiceTests` — 吊销 + 过期清理
+- `LogSanitizerTests` — 脱敏规则
+- `OStickHeaderTests` — Authorization header 解析
+- `BasicAuthParserTests` — Admin Basic Auth 解析
+- `DnParserTests` — DN 字符串解析
+- `UacFlagsTests` — AD userAccountControl 位解析
+- `UsersControllerTests` — 用户管理 API
+- `CardsControllerTests` — 发卡/吊销 API
+- `UserStoreTests` — EF Core 数据访问
+- `XmlHelperTests` — XML 辅助方法
+- `Architecture/LayeringTests` — ArchUnit 三层依赖规则保护
 
 ### 11.2 集成测试
 

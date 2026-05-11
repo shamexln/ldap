@@ -176,19 +176,20 @@ Write-Host "  Done." -ForegroundColor Green
 # ================================================================
 Write-Host "[4/4] Building WiX MSI installer..." -ForegroundColor Yellow
 
-# Build the MSI using dotnet build (supports Files glob patterns)
-dotnet build `
-    (Join-Path $InstallerDir "ImprivataProxy.Installer.wixproj") `
-    -c Release `
-    -o $InstallerDir
+# Build the MSI using dotnet build (no -o flag; it breaks MakeSfxCA assembly resolution)
+Push-Location $InstallerDir
+dotnet build "ImprivataProxy.Installer.wixproj" -c Release
+$buildExitCode = $LASTEXITCODE
+Pop-Location
 
-if ($LASTEXITCODE -ne 0) {
+if ($buildExitCode -ne 0) {
     Write-Host "ERROR: WiX build failed!" -ForegroundColor Red
     exit 1
 }
 
-# Find the generated MSI
-$generatedMsi = Get-ChildItem -Path $InstallerDir -Filter "*.msi" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+# Locate the generated MSI from the default WiX output
+$wixOutputDir = Join-Path $InstallerDir "bin\Release"
+$generatedMsi = Get-ChildItem -Path $wixOutputDir -Filter "*.msi" -Recurse | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if ($generatedMsi) {
     $OutputMsi = $generatedMsi.FullName
 }

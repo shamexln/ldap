@@ -144,6 +144,9 @@ Restart-Service ImprivataProxy
 | LDAP 地址 | `Ad.LdapUrl` | AD 服务器地址 |
 | LDAP Base DN | `Ad.BaseDn` | 搜索根目录 |
 | 同步间隔 | `Ad.SyncIntervalMinutes` | AD 用户同步间隔（分钟） |
+| UID 模式 | `Ad.UidMode` | 身份识别模式：`Badge`（通过 Badge 号码实时查询 AD）或 `CardHash`（本地卡哈希查找） |
+| Badge 属性 | `Ad.BadgeAttribute` | AD 中存储 Badge 号码的属性名（默认 `employeeNumber`） |
+| 授权组 | `Ad.RequiredGroups` | 用户必须属于其中至少一个组才允许登录（数组，为空则不限制） |
 | 密码锁定次数 | `AuthPolicy.PwdMaxFails` | 连续失败后锁定账户 |
 | 锁定时间 | `AuthPolicy.PwdLockoutMinutes` | 锁定持续时间（分钟） |
 
@@ -195,6 +198,73 @@ msiexec /x "ImprivataProxy-1.0.0.msi" /qn
 ```
 
 > **注意**：卸载后 `data\` 和 `logs\` 目录会保留，不会删除用户数据。如需完全清理，请手动删除安装目录。
+
+## Active Directory 域控初始化
+
+在安装 ImprivataProxy 之前，需要在域控制器上完成以下准备工作。安装包中提供了一键初始化脚本 `Setup-AD-TestUsers.ps1`。
+
+### 前置条件
+
+- 域控服务器（Windows Server 2016 或更高）具有管理员权限
+- 已安装 Active Directory Domain Services (AD DS) 角色
+- 已安装 ActiveDirectory PowerShell 模块（域控默认已安装）
+
+### 需要准备的内容
+
+| 项目 | 说明 |
+|------|------|
+| 服务账号 | 用于 ImprivataProxy 连接 LDAP 查询用户信息 |
+| 用户的 `employeeNumber` 属性 | 存储 Badge（徽章）号码，作为刷卡识别的主键 |
+| 授权安全组 | 用户必须属于至少一个授权组才允许登录 |
+
+### 执行初始化脚本
+
+在域控服务器上以管理员身份运行 PowerShell：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File Setup-AD-TestUsers.ps1
+```
+
+脚本自动执行以下操作：
+
+1. **创建测试用户**（位于 Base DN 搜索范围内）
+   - `tester1`（Badge: `9021054`）
+   - `tester2`（Badge: `9999999`）
+
+2. **创建服务账号** `svc_draeger`（位于 Readers OU）
+   - 密码永不过期
+   - 无需管理员权限，普通域用户即可读取其他用户属性
+
+3. **创建授权安全组**
+   - `PRM_Infirmier_Moniteur`
+   - `PRM_Aide_Soignant`
+   - `PRM_Assistant_Logistique`
+
+4. **分配组成员**（将测试用户加入所有授权组）
+
+### 手动设置用户 Badge 号码
+
+如果已有现成域用户，只需为其填写 `employeeNumber` 属性：
+
+```powershell
+Set-ADUser -Identity "existing_user" -EmployeeNumber "1234567"
+```
+
+也可以在"Active Directory 用户和计算机"图形界面中：用户属性 → 组织 → 员工编号。
+
+### AD 属性说明
+
+ImprivataProxy 通过 Badge 号码查询用户后，将读取以下标准 AD 属性（Windows Server 2016+ 默认自带，无需扩展 Schema）：
+
+| 属性 | 说明 |
+|------|------|
+| `employeeNumber` | Badge 号码（可通过 `appsettings.json` 的 `BadgeAttribute` 配置映射到其他属性） |
+| `displayName` | 显示名称 |
+| `givenName` | 名 |
+| `sn` | 姓 |
+| `sAMAccountName` | 登录名 |
+| `userPrincipalName` | UPN 登录名 |
+| `memberOf` | 组成员关系（用于授权判断） |
 
 ## LDAPS 证书配置（加密通信）
 

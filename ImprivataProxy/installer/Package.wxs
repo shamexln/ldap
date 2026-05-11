@@ -32,11 +32,36 @@
          User-configurable properties (shown in UI dialogs)
          ================================================================ -->
     <Property Id="LISTEN_PORT" Value="80" />
-    <Property Id="LDAP_URL" Value="ldaps://sso.ad.vista.com:636" />
-    <Property Id="LDAP_BASE_DN" Value="DC=ad,DC=vista,DC=com" />
-    <Property Id="LDAP_SERVICE_DN" Value="CN=Administrator,CN=Users,DC=ad,DC=vista,DC=com" />
+    <Property Id="LDAP_URL" Secure="yes" />
+    <Property Id="LDAP_BASE_DN" Secure="yes" />
+    <Property Id="LDAP_SERVICE_DN" Secure="yes" />
     <Property Id="AD_SVC_PASSWORD" Hidden="yes" Secure="yes" />
     <Property Id="ADMIN_PASSWORD" Hidden="yes" Secure="yes" />
+
+    <!-- ================================================================
+         Domain detection: read domain name from registry
+         ================================================================ -->
+    <Property Id="COMPUTER_DOMAIN">
+      <RegistrySearch Id="SearchDomain"
+                      Root="HKLM"
+                      Key="SYSTEM\CurrentControlSet\Services\Tcpip\Parameters"
+                      Name="Domain"
+                      Type="raw" />
+    </Property>
+
+    <!-- C# Custom Action DLL for domain detection -->
+    <Binary Id="DetectDomainCA_dll"
+            SourceFile="$(var.DetectDomainCA.TargetDir)\DetectDomainCA.CA.dll" />
+
+    <CustomAction Id="DetectDomainCA"
+                  DllEntry="DetectDomainInfo"
+                  BinaryRef="DetectDomainCA_dll"
+                  Execute="immediate"
+                  Return="ignore" />
+
+    <InstallUISequence>
+      <Custom Action="DetectDomainCA" After="CostFinalize" Condition="COMPUTER_DOMAIN" />
+    </InstallUISequence>
 
     <!-- ================================================================
          Directory structure
@@ -46,6 +71,7 @@
         <Directory Id="DIR_Data" Name="data" />
         <Directory Id="DIR_Logs" Name="logs" />
         <Directory Id="DIR_Certs" Name="certs" />
+        <Directory Id="DIR_Scripts" Name="script" />
       </Directory>
     </StandardDirectory>
 
@@ -62,6 +88,9 @@
       <ComponentRef Id="ServiceEnvironment" />
       <ComponentRef Id="FirewallRule" />
       <ComponentRef Id="ConfigScript" />
+      <ComponentRef Id="ScriptSetupDC" />
+      <ComponentRef Id="ScriptSetupClient" />
+      <ComponentRef Id="ScriptSetupADTestUsers" />
     </Feature>
 
     <!-- ================================================================
@@ -97,6 +126,21 @@
     <DirectoryRef Id="INSTALLFOLDER">
       <Component Id="AppSettingsConfig" Guid="D4E5F6A7-B8C9-0123-DEF0-234567890123" NeverOverwrite="yes">
         <File Id="AppSettingsJson" Source="publish\appsettings.json" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- ================================================================
+         Components: LDAPS setup scripts (script\ subdirectory)
+         ================================================================ -->
+    <DirectoryRef Id="DIR_Scripts">
+      <Component Id="ScriptSetupDC" Guid="1D4E8F2A-7B3C-4A59-9E6D-C8F1A2B3D4E5">
+        <File Id="SetupDCLDAPS" Source="Setup-DC-LDAPS.ps1" KeyPath="yes" />
+      </Component>
+      <Component Id="ScriptSetupClient" Guid="2E5F9A3B-8C4D-5B6A-AF7E-D9E2B3C4E5F6">
+        <File Id="SetupClientLDAPS" Source="Setup-Client-LDAPS.ps1" KeyPath="yes" />
+      </Component>
+      <Component Id="ScriptSetupADTestUsers" Guid="3F6A0B4C-9D5E-6C7B-B08F-EA03C4D5F6A7">
+        <File Id="SetupADTestUsers" Source="Setup-AD-TestUsers.ps1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
 

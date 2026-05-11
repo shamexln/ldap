@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <OutputType>Library</OutputType>
+    <RootNamespace>ImprivataProxy.Installer.CustomActions</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Dtf.CustomAction" Version="4.0.5" />
+    <PackageReference Include="WixToolset.Dtf.WindowsInstaller" Version="4.0.5" />
+  </ItemGroup>
+
+</Project>

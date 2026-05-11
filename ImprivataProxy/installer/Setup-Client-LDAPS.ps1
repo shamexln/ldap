@@ -1,24 +1,27 @@
 ﻿<#
 .SYNOPSIS
-    在 ImprivataProxy 主机上配置 LDAPS 证书信任。
+    Interactive tool to configure LDAPS certificate trust on the ImprivataProxy host.
 
 .DESCRIPTION
-    此脚本在安装 ImprivataProxy 的主机上执行以下操作：
-    1. 导入域控的自签名证书到受信任根存储
-    2. 验证 LDAPS 连接
-    3. 验证 ImprivataProxy 服务状态
+    Provides an interactive menu to:
+    1. Verify DNS resolution
+    2. Check certificate file
+    3. Import certificate into Trusted Root store
+    4. Verify LDAPS connection
+    5. Check ImprivataProxy service status
+    6. Run all steps sequentially
 
 .PARAMETER CertFile
-    从域控导出的证书文件路径（.cer 文件）。
+    Path to the certificate file (.cer) exported from the domain controller.
 
 .PARAMETER LdapHost
-    域控的 FQDN（与证书中的 DnsName 一致）。
+    FQDN of the domain controller (must match the DnsName in the certificate).
 
 .PARAMETER LdapPort
-    LDAPS 端口，默认 636。
+    LDAPS port, default 636.
 
 .EXAMPLE
-    .\Setup-Client-LDAPS.ps1 -CertFile "C:\sso.ad.vista.com.cer" -LdapHost "sso.ad.vista.com"
+    .\Setup-Client-LDAPS.ps1 -CertFile "C:\ldaps.chrliege.be.cer" -LdapHost "ldaps.chrliege.be"
 #>
 param(
     [Parameter(Mandatory)]
@@ -32,100 +35,168 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host " ImprivataProxy 主机 LDAPS 配置脚本" -ForegroundColor Cyan
-Write-Host " 证书文件: $CertFile" -ForegroundColor Cyan
-Write-Host " LDAP 主机: ${LdapHost}:${LdapPort}" -ForegroundColor Cyan
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host ""
+# ================================================================
+# Function definitions
+# ================================================================
 
-# ================================================================
-# Step 0: 验证 DNS 能解析目标主机
-# ================================================================
-Write-Host "[0/3] 检查 DNS 解析..." -ForegroundColor Yellow
-try {
-    $resolved = [System.Net.Dns]::GetHostAddresses($LdapHost)
-    Write-Host "  $LdapHost -> $($resolved[0])" -ForegroundColor Green
-} catch {
-    Write-Host "  错误: 无法解析主机名 $LdapHost" -ForegroundColor Red
+function Show-Banner {
     Write-Host ""
-    Write-Host "  解决方法 (二选一):" -ForegroundColor Yellow
-    Write-Host "    1. 将 DNS 指向域控: Set-DnsClientServerAddress -InterfaceAlias 'Ethernet0' -ServerAddresses '<域控IP>','8.8.8.8'" -ForegroundColor White
-    Write-Host "    2. 添加 hosts 记录: Add-Content C:\Windows\System32\drivers\etc\hosts '<域控IP> $LdapHost'" -ForegroundColor White
-    Write-Host ""
-    exit 1
+    Write-Host "============================================" -ForegroundColor Cyan
+    Write-Host " ImprivataProxy Host LDAPS Configuration" -ForegroundColor Cyan
+    Write-Host " Certificate: $CertFile" -ForegroundColor Cyan
+    Write-Host " LDAP Host:   ${LdapHost}:${LdapPort}" -ForegroundColor Cyan
+    Write-Host "============================================" -ForegroundColor Cyan
 }
 
-# ================================================================
-# Step 1: 验证证书文件存在
-# ================================================================
-Write-Host "[1/3] 检查证书文件..." -ForegroundColor Yellow
-if (-not (Test-Path $CertFile)) {
-    Write-Host "  错误: 证书文件不存在: $CertFile" -ForegroundColor Red
-    Write-Host "  请先从域控复制证书文件到本机" -ForegroundColor Yellow
-    exit 1
-}
-Write-Host "  文件存在: $CertFile" -ForegroundColor Green
-
-# ================================================================
-# Step 2: 导入证书到受信任根存储
-# ================================================================
-Write-Host "[2/3] 导入证书到受信任根存储..." -ForegroundColor Yellow
-
-# 先删除旧的同名证书
-$oldCerts = Get-ChildItem Cert:\LocalMachine\Root | Where-Object { $_.Subject -match $LdapHost }
-if ($oldCerts) {
-    $oldCerts | Remove-Item -Force
-    Write-Host "  已删除旧证书" -ForegroundColor DarkGray
+function Show-Menu {
+    Write-Host ""
+    Write-Host "  [1] Verify DNS resolution" -ForegroundColor White
+    Write-Host "  [2] Check certificate file" -ForegroundColor White
+    Write-Host "  [3] Import certificate into Trusted Root store" -ForegroundColor White
+    Write-Host "  [4] Verify LDAPS connection" -ForegroundColor White
+    Write-Host "  [5] Check ImprivataProxy service status" -ForegroundColor White
+    Write-Host "  [A] Run ALL steps (1-5)" -ForegroundColor Yellow
+    Write-Host "  [Q] Exit" -ForegroundColor DarkGray
+    Write-Host ""
 }
 
-$imported = Import-Certificate -FilePath $CertFile -CertStoreLocation "Cert:\LocalMachine\Root"
-Write-Host "  已导入证书: $($imported.Subject)" -ForegroundColor Green
-Write-Host "  指纹: $($imported.Thumbprint)" -ForegroundColor Green
-
-# ================================================================
-# Step 3: 验证 LDAPS 连接
-# ================================================================
-Write-Host "[3/3] 验证 LDAPS 连接..." -ForegroundColor Yellow
-
-try {
-    $tcp = New-Object System.Net.Sockets.TcpClient($LdapHost, $LdapPort)
-    $ssl = New-Object System.Net.Security.SslStream($tcp.GetStream(), $false, {$true})
-    $ssl.AuthenticateAsClient($LdapHost)
+function Step-VerifyDns {
     Write-Host ""
-    Write-Host "============================================" -ForegroundColor Green
-    Write-Host " LDAPS 连接成功!" -ForegroundColor Green
-    Write-Host " TLS 版本: $($ssl.SslProtocol)" -ForegroundColor Green
-    Write-Host " 服务器证书: $($ssl.RemoteCertificate.Subject)" -ForegroundColor Green
-    Write-Host "============================================" -ForegroundColor Green
-    $ssl.Dispose()
-    $tcp.Dispose()
-} catch {
-    Write-Host ""
-    Write-Host "============================================" -ForegroundColor Red
-    Write-Host " LDAPS 连接失败!" -ForegroundColor Red
-    Write-Host " 错误: $_" -ForegroundColor Red
-    Write-Host "============================================" -ForegroundColor Red
-    Write-Host ""
-    Write-Host "排查步骤:" -ForegroundColor Yellow
-    Write-Host "  1. 确认域控 LDAPS 已启用 (在域控上运行 Setup-DC-LDAPS.ps1)" -ForegroundColor White
-    Write-Host "  2. 确认网络连通: Test-NetConnection $LdapHost -Port $LdapPort" -ForegroundColor White
-    Write-Host "  3. 确认防火墙未阻止 $LdapPort 端口" -ForegroundColor White
-    exit 1
-}
-
-Write-Host ""
-Write-Host "ImprivataProxy appsettings.json 中应配置:" -ForegroundColor Cyan
-Write-Host "  `"LdapUrl`": `"ldaps://${LdapHost}:${LdapPort}`"" -ForegroundColor White
-Write-Host ""
-
-# 检查 ImprivataProxy 服务是否存在
-$svc = Get-Service -Name "ImprivataProxy" -ErrorAction SilentlyContinue
-if ($svc) {
-    Write-Host "ImprivataProxy 服务状态: $($svc.Status)" -ForegroundColor Cyan
-    if ($svc.Status -eq "Running") {
-        Write-Host "建议重启服务以加载新配置: Restart-Service ImprivataProxy" -ForegroundColor Yellow
+    Write-Host "[1] Checking DNS resolution for $LdapHost..." -ForegroundColor Yellow
+    try {
+        $resolved = [System.Net.Dns]::GetHostAddresses($LdapHost)
+        Write-Host "  $LdapHost -> $($resolved[0])" -ForegroundColor Green
     }
-} else {
-    Write-Host "提示: ImprivataProxy 服务尚未安装，请先运行 MSI 安装包" -ForegroundColor DarkGray
+    catch {
+        Write-Host "  ERROR: Cannot resolve hostname $LdapHost" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "  Solutions (choose one):" -ForegroundColor Yellow
+        Write-Host "    1. Point DNS to DC:" -ForegroundColor White
+        Write-Host "       Set-DnsClientServerAddress -InterfaceAlias Ethernet0 -ServerAddresses DC_IP,8.8.8.8" -ForegroundColor DarkGray
+        Write-Host "    2. Add hosts entry:" -ForegroundColor White
+        Write-Host "       Add-Content C:\Windows\System32\drivers\etc\hosts 'DC_IP $LdapHost'" -ForegroundColor DarkGray
+    }
+}
+
+function Step-CheckCertFile {
+    Write-Host ""
+    Write-Host "[2] Checking certificate file..." -ForegroundColor Yellow
+    if (-not (Test-Path $CertFile)) {
+        Write-Host "  ERROR: Certificate file not found: $CertFile" -ForegroundColor Red
+        Write-Host "  Please copy the certificate file from the DC first." -ForegroundColor Yellow
+        return $false
+    }
+    $certInfo = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($CertFile)
+    Write-Host "  File exists: $CertFile" -ForegroundColor Green
+    Write-Host "  Subject:     $($certInfo.Subject)" -ForegroundColor Green
+    Write-Host "  Expires:     $($certInfo.NotAfter)" -ForegroundColor Green
+    Write-Host "  Thumbprint:  $($certInfo.Thumbprint)" -ForegroundColor Green
+    return $true
+}
+
+function Step-ImportCertificate {
+    Write-Host ""
+    Write-Host "[3] Importing certificate into Trusted Root store..." -ForegroundColor Yellow
+    if (-not (Test-Path $CertFile)) {
+        Write-Host "  ERROR: Certificate file not found: $CertFile" -ForegroundColor Red
+        Write-Host "  Run step [2] to verify the file first." -ForegroundColor Yellow
+        return
+    }
+
+    # Remove old certificates with the same subject
+    $oldCerts = Get-ChildItem Cert:\LocalMachine\Root | Where-Object { $_.Subject -match $LdapHost }
+    if ($oldCerts) {
+        $oldCerts | Remove-Item -Force
+        Write-Host "  Removed $($oldCerts.Count) old certificate(s)" -ForegroundColor DarkGray
+    }
+
+    $imported = Import-Certificate -FilePath $CertFile -CertStoreLocation "Cert:\LocalMachine\Root"
+    Write-Host "  Imported: $($imported.Subject)" -ForegroundColor Green
+    Write-Host "  Thumbprint: $($imported.Thumbprint)" -ForegroundColor Green
+}
+
+function Step-VerifyLdaps {
+    Write-Host ""
+    Write-Host "[4] Verifying LDAPS connection to ${LdapHost}:${LdapPort}..." -ForegroundColor Yellow
+    try {
+        $tcp = New-Object System.Net.Sockets.TcpClient($LdapHost, $LdapPort)
+        $callback = [System.Net.Security.RemoteCertificateValidationCallback]{ $true }
+        $ssl = New-Object System.Net.Security.SslStream($tcp.GetStream(), $false, $callback)
+        $ssl.AuthenticateAsClient($LdapHost)
+        Write-Host ""
+        Write-Host "  LDAPS connection successful!" -ForegroundColor Green
+        Write-Host "  TLS version: $($ssl.SslProtocol)" -ForegroundColor Green
+        Write-Host "  Server cert: $($ssl.RemoteCertificate.Subject)" -ForegroundColor Green
+        $ssl.Dispose()
+        $tcp.Dispose()
+    }
+    catch {
+        Write-Host ""
+        Write-Host "  LDAPS connection FAILED!" -ForegroundColor Red
+        Write-Host "  Error: $_" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "  Troubleshooting:" -ForegroundColor Yellow
+        Write-Host "    1. Ensure LDAPS is enabled on DC (run Setup-DC-LDAPS.ps1 on the DC)" -ForegroundColor White
+        Write-Host "    2. Check connectivity: Test-NetConnection $LdapHost -Port $LdapPort" -ForegroundColor White
+        Write-Host "    3. Ensure firewall is not blocking port $LdapPort" -ForegroundColor White
+    }
+}
+
+function Step-CheckService {
+    Write-Host ""
+    Write-Host "[5] Checking ImprivataProxy service..." -ForegroundColor Yellow
+    $svc = Get-Service -Name "ImprivataProxy" -ErrorAction SilentlyContinue
+    if ($svc) {
+        Write-Host "  Service found: ImprivataProxy" -ForegroundColor Green
+        Write-Host "  Status: $($svc.Status)" -ForegroundColor Green
+        if ($svc.Status -eq "Running") {
+            Write-Host "  Tip: Restart service to load new config:" -ForegroundColor Yellow
+            Write-Host "       Restart-Service ImprivataProxy" -ForegroundColor DarkGray
+        }
+    }
+    else {
+        Write-Host "  ImprivataProxy service not installed." -ForegroundColor DarkGray
+        Write-Host "  Please run the MSI installer first." -ForegroundColor Yellow
+    }
+
+    Write-Host ""
+    Write-Host "  Recommended appsettings.json:" -ForegroundColor Cyan
+    Write-Host "    ""LdapUrl"": ""ldaps://${LdapHost}:${LdapPort}""" -ForegroundColor White
+}
+
+function Step-RunAll {
+    Step-VerifyDns
+    Step-CheckCertFile
+    Step-ImportCertificate
+    Step-VerifyLdaps
+    Step-CheckService
+    Write-Host ""
+    Write-Host "All steps completed." -ForegroundColor Green
+}
+
+# ================================================================
+# Main loop
+# ================================================================
+Show-Banner
+
+while ($true) {
+    Show-Menu
+    $choice = Read-Host "Select an option"
+
+    switch ($choice.ToUpper()) {
+        "1" { Step-VerifyDns }
+        "2" { Step-CheckCertFile | Out-Null }
+        "3" { Step-ImportCertificate }
+        "4" { Step-VerifyLdaps }
+        "5" { Step-CheckService }
+        "A" { Step-RunAll }
+        "Q" {
+            Write-Host ""
+            Write-Host "Exiting." -ForegroundColor DarkGray
+            return
+        }
+        default {
+            Write-Host "  Invalid option. Please enter 1-5, A, or Q." -ForegroundColor Red
+        }
+    }
 }

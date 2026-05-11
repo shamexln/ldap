@@ -20,12 +20,18 @@ public class UserStore : IUserStore
     public async Task<UpsertOutcome> UpsertFromAdAsync(AdUserDto dto, CancellationToken ct)
     {
         var guidStr = dto.ObjectGuid.ToString();
-        var existing = await _db.Users.FirstOrDefaultAsync(u => u.AdObjectGuid == guidStr, ct);
+        var existing = await _db.Users.FirstOrDefaultAsync(u => u.AdObjectGuid == guidStr, ct)
+            ?? await _db.Users.FirstOrDefaultAsync(u => u.Username == dto.Username && u.Domain == dto.Domain, ct);
+
+        var upn = !string.IsNullOrEmpty(dto.Username) && !string.IsNullOrEmpty(dto.Domain)
+            ? $"{dto.Username}@{dto.Domain}"
+            : null;
 
         var attributes = JsonSerializer.Serialize(new
         {
             mail = dto.Mail,
             groups = dto.Groups,
+            upn,
         }, JsonOpts);
 
         if (existing is null)
@@ -38,6 +44,8 @@ public class UserStore : IUserStore
                 AdObjectGuid = guidStr,
                 AdDistinguishedName = dto.DistinguishedName,
                 DisplayName = dto.DisplayName,
+                GivenName = dto.GivenName,
+                Sn = dto.Sn,
                 PwdHash = null,
                 PinHash = null,
                 Enabled = dto.Enabled,
@@ -56,13 +64,18 @@ public class UserStore : IUserStore
             existing.Domain != dto.Domain ||
             existing.AdDistinguishedName != dto.DistinguishedName ||
             existing.DisplayName != dto.DisplayName ||
+            existing.GivenName != dto.GivenName ||
+            existing.Sn != dto.Sn ||
             existing.Enabled != dto.Enabled ||
             existing.AttributesJson != attributes;
 
+        existing.AdObjectGuid = guidStr;
         existing.Username = dto.Username;
         existing.Domain = dto.Domain;
         existing.AdDistinguishedName = dto.DistinguishedName;
         existing.DisplayName = dto.DisplayName;
+        existing.GivenName = dto.GivenName;
+        existing.Sn = dto.Sn;
         existing.Enabled = dto.Enabled;
         existing.AttributesJson = attributes;
         existing.LastSyncedAt = DateTime.UtcNow;

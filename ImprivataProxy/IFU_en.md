@@ -144,6 +144,9 @@ Restart-Service ImprivataProxy
 | LDAP address | `Ad.LdapUrl` | AD server address |
 | LDAP Base DN | `Ad.BaseDn` | Search root directory |
 | Sync interval | `Ad.SyncIntervalMinutes` | AD user sync interval (minutes) |
+| UID mode | `Ad.UidMode` | Identity mode: `Badge` (real-time AD query by badge number) or `CardHash` (local card hash lookup) |
+| Badge attribute | `Ad.BadgeAttribute` | AD attribute storing badge number (default `employeeNumber`) |
+| Required groups | `Ad.RequiredGroups` | User must belong to at least one group to log in (array, empty = no restriction) |
 | Password lockout attempts | `AuthPolicy.PwdMaxFails` | Lock account after consecutive failures |
 | Lockout duration | `AuthPolicy.PwdLockoutMinutes` | Lockout duration (minutes) |
 
@@ -195,6 +198,73 @@ msiexec /x "ImprivataProxy-1.0.0.msi" /qn
 ```
 
 > **Note**: After uninstallation, the `data\` and `logs\` directories are preserved and user data is not deleted. To completely clean up, manually delete the installation directory.
+
+## Active Directory Domain Controller Initialization
+
+Before installing ImprivataProxy, the following preparation must be completed on the domain controller. A one-click initialization script `Setup-AD-TestUsers.ps1` is included in the installer package.
+
+### Prerequisites
+
+- Domain controller (Windows Server 2016 or later) with administrator privileges
+- Active Directory Domain Services (AD DS) role installed
+- ActiveDirectory PowerShell module installed (installed by default on DCs)
+
+### What Needs to Be Prepared
+
+| Item | Description |
+|------|-------------|
+| Service account | Used by ImprivataProxy to connect and query user information via LDAP |
+| User `employeeNumber` attribute | Stores the Badge number, used as the primary key for badge reader identification |
+| Authorization security groups | Users must belong to at least one authorization group to be permitted to log in |
+
+### Running the Initialization Script
+
+On the domain controller, run PowerShell as Administrator:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File Setup-AD-TestUsers.ps1
+```
+
+The script automatically performs the following:
+
+1. **Creates test users** (within the Base DN search scope)
+   - `tester1` (Badge: `9021054`)
+   - `tester2` (Badge: `9999999`)
+
+2. **Creates service account** `svc_draeger` (in the Readers OU)
+   - Password never expires
+   - No admin privileges required — a regular domain user can read other users' attributes
+
+3. **Creates authorization security groups**
+   - `PRM_Infirmier_Moniteur`
+   - `PRM_Aide_Soignant`
+   - `PRM_Assistant_Logistique`
+
+4. **Assigns group membership** (adds test users to all authorization groups)
+
+### Manually Setting User Badge Numbers
+
+If you already have existing domain users, simply populate their `employeeNumber` attribute:
+
+```powershell
+Set-ADUser -Identity "existing_user" -EmployeeNumber "1234567"
+```
+
+You can also use the "Active Directory Users and Computers" GUI: User Properties → Organization → Employee Number.
+
+### AD Attribute Reference
+
+After querying a user by Badge number, ImprivataProxy reads the following standard AD attributes (all built-in on Windows Server 2016+, no schema extension required):
+
+| Attribute | Description |
+|-----------|-------------|
+| `employeeNumber` | Badge number (configurable via `BadgeAttribute` in `appsettings.json` to map to other attributes) |
+| `displayName` | Display name |
+| `givenName` | First name |
+| `sn` | Surname |
+| `sAMAccountName` | Logon name |
+| `userPrincipalName` | UPN logon name |
+| `memberOf` | Group membership (used for authorization decisions) |
 
 ## LDAPS Certificate Configuration (Encrypted Communication)
 

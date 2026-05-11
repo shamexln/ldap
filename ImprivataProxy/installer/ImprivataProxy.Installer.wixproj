@@ -12,4 +12,8 @@
     <PackageReference Include="WixToolset.Util.wixext" Version="4.0.5" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="CustomActions\DetectDomainCA.csproj" />
+  </ItemGroup>
+
 </Project>

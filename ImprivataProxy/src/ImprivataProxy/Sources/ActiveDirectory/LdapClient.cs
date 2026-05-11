@@ -16,8 +16,8 @@ public class LdapClient : ILdapClient, IRemotePasswordVerifier
     private static readonly string[] SyncAttributes =
     {
         "objectGUID", "sAMAccountName", "userPrincipalName",
-        "distinguishedName", "displayName", "mail",
-        "memberOf", "userAccountControl"
+        "distinguishedName", "displayName", "givenName", "sn",
+        "mail", "memberOf", "userAccountControl"
     };
 
     private readonly AdConfig _config;
@@ -40,6 +40,7 @@ public class LdapClient : ILdapClient, IRemotePasswordVerifier
     {
         if (string.IsNullOrEmpty(identity.DistinguishedName))
         {
+            _logger.LogInformation("VerifyAsync: missing DistinguishedName, returning Invalid");
             return Task.FromResult(new RemoteVerifyResult(
                 RemoteVerifyOutcome.Invalid, "missing DistinguishedName"));
         }
@@ -48,17 +49,22 @@ public class LdapClient : ILdapClient, IRemotePasswordVerifier
         {
             try
             {
+                _logger.LogInformation("VerifyAsync: binding DN={Dn}, PwdLen={Len}, LdapUrl={Url}",
+                    identity.DistinguishedName, password?.Length, _config.LdapUrl);
                 using var conn = OpenConnection(_config.BindTimeoutSeconds);
                 conn.Bind(new NetworkCredential(identity.DistinguishedName, password));
+                _logger.LogInformation("VerifyAsync: bind succeeded for {Dn}", identity.DistinguishedName);
                 return new RemoteVerifyResult(RemoteVerifyOutcome.Valid);
             }
             catch (LdapException ex) when (ex.ErrorCode == LdapInvalidCredentials)
             {
+                _logger.LogWarning("VerifyAsync: invalid credentials for {Dn}, ErrorCode={Code}",
+                    identity.DistinguishedName, ex.ErrorCode);
                 return new RemoteVerifyResult(RemoteVerifyOutcome.Invalid);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "LDAP bind failed for {Dn}", identity.DistinguishedName);
+                _logger.LogWarning(ex, "VerifyAsync: LDAP bind failed for {Dn}", identity.DistinguishedName);
                 return new RemoteVerifyResult(RemoteVerifyOutcome.Unreachable, ex.Message);
             }
         }, ct);
@@ -68,6 +74,8 @@ public class LdapClient : ILdapClient, IRemotePasswordVerifier
         [EnumeratorCancellation] CancellationToken ct)
     {
         var svcPwd = Environment.GetEnvironmentVariable(_config.ServiceAccountPasswordEnvVar);
+        _logger.LogInformation("SearchAllUsersAsync: EnvVar={EnvVar}, PwdLen={Len}, DN={Dn}, LdapUrl={Url}, BaseDn={BaseDn}",
+            _config.ServiceAccountPasswordEnvVar, svcPwd?.Length, _config.ServiceAccountDn, _config.LdapUrl, _config.BaseDn);
         if (string.IsNullOrEmpty(svcPwd))
         {
             throw new InvalidOperationException(
@@ -75,7 +83,9 @@ public class LdapClient : ILdapClient, IRemotePasswordVerifier
         }
 
         using var conn = OpenConnection(_config.SearchTimeoutSeconds);
+        _logger.LogInformation("SearchAllUsersAsync: connection opened, attempting bind...");
         conn.Bind(new NetworkCredential(_config.ServiceAccountDn, svcPwd));
+        _logger.LogInformation("SearchAllUsersAsync: bind succeeded");
 
         var pageControl = new PageResultRequestControl(_config.PageSize);
 
@@ -124,15 +134,21 @@ public class LdapClient : ILdapClient, IRemotePasswordVerifier
             {
                 using var conn = OpenConnection(_config.BindTimeoutSeconds);
                 var upn = $"{username}@{domain}";
+                _logger.LogInformation("OnDemand: binding UPN={Upn}, PwdLen={Len}, LdapUrl={Url}",
+                    upn, password?.Length, _config.LdapUrl);
                 conn.Bind(new NetworkCredential(upn, password));
+                _logger.LogInformation("OnDemand: bind succeeded for {Upn}", upn);
 
+                var filter = $"(&(objectClass=user)(sAMAccountName={EscapeLdapFilter(username)}))";
+                _logger.LogInformation("OnDemand: searching BaseDn={BaseDn}, Filter={Filter}", _config.BaseDn, filter);
                 var request = new SearchRequest(
                     _config.BaseDn,
-                    $"(&(objectClass=user)(sAMAccountName={EscapeLdapFilter(username)}))",
+                    filter,
                     SearchScope.Subtree,
                     SyncAttributes);
 
                 var response = (SearchResponse)conn.SendRequest(request);
+                _logger.LogInformation("OnDemand: search returned {Count} entries", response.Entries.Count);
                 if (response.Entries.Count == 0)
                 {
                     _logger.LogWarning("OnDemand bind succeeded but user entry not found: {Upn}", upn);
@@ -142,20 +158,65 @@ public class LdapClient : ILdapClient, IRemotePasswordVerifier
                 var dto = TryMapEntry(response.Entries[0]);
                 if (dto is null)
                 {
+                    _logger.LogWarning("OnDemand: TryMapEntry returned null for {Upn}", upn);
                     return new OnDemandLoginResult(RemoteVerifyOutcome.Invalid, Diagnostic: "failed to map entry");
                 }
 
+                _logger.LogInformation("OnDemand: success for {Upn}, mapped user={User}", upn, dto.Username);
                 return new OnDemandLoginResult(RemoteVerifyOutcome.Valid, dto);
             }
             catch (LdapException ex) when (ex.ErrorCode == LdapInvalidCredentials)
             {
+                _logger.LogWarning("OnDemand: invalid credentials for {Username}@{Domain}, ErrorCode={Code}",
+                    username, domain, ex.ErrorCode);
                 return new OnDemandLoginResult(RemoteVerifyOutcome.Invalid);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "OnDemand bind failed for {Username}@{Domain}", username, domain);
+                _logger.LogWarning(ex, "OnDemand: bind failed for {Username}@{Domain}", username, domain);
                 return new OnDemandLoginResult(RemoteVerifyOutcome.Unreachable, Diagnostic: ex.Message);
             }
+        }, ct);
+    }
+
+    public Task<AdUserDto?> SearchByBadgeAsync(string badgeValue, CancellationToken ct)
+    {
+        return Task.Run(() =>
+        {
+            var svcPwd = Environment.GetEnvironmentVariable(_config.ServiceAccountPasswordEnvVar);
+            if (string.IsNullOrEmpty(svcPwd))
+            {
+                throw new InvalidOperationException(
+                    $"Service account password env var '{_config.ServiceAccountPasswordEnvVar}' not set");
+            }
+
+            _logger.LogInformation("SearchByBadge: DN={Dn}, PwdLen={Len}, LdapUrl={Url}, Badge={Badge}",
+                _config.ServiceAccountDn, svcPwd?.Length, _config.LdapUrl, badgeValue);
+            using var conn = OpenConnection(_config.SearchTimeoutSeconds);
+            _logger.LogInformation("SearchByBadge: connection opened, attempting bind...");
+            conn.Bind(new NetworkCredential(_config.ServiceAccountDn, svcPwd));
+            _logger.LogInformation("SearchByBadge: bind succeeded");
+
+            var filter = $"(&(objectCategory=person)(objectClass=user)({EscapeLdapFilter(_config.BadgeAttribute)}={EscapeLdapFilter(badgeValue)}))";
+            _logger.LogInformation("SearchByBadge: filter={Filter}, BaseDn={BaseDn}", filter, _config.BaseDn);
+            var request = new SearchRequest(
+                _config.BaseDn,
+                filter,
+                SearchScope.Subtree,
+                SyncAttributes);
+
+            var response = (SearchResponse)conn.SendRequest(request);
+            _logger.LogInformation("SearchByBadge: search returned {Count} entries", response.Entries.Count);
+            if (response.Entries.Count == 0)
+            {
+                _logger.LogWarning("SearchByBadge: no results for {Attribute}={Value}",
+                    _config.BadgeAttribute, badgeValue);
+                return null;
+            }
+
+            var dto = TryMapEntry(response.Entries[0]);
+            _logger.LogInformation("SearchByBadge: mapped result={User}", dto?.Username ?? "(null)");
+            return dto;
         }, ct);
     }
 
@@ -172,6 +233,8 @@ public class LdapClient : ILdapClient, IRemotePasswordVerifier
     private LdapConnection OpenConnection(int timeoutSeconds)
     {
         var uri = new Uri(_config.LdapUrl);
+        _logger.LogInformation("OpenConnection: Host={Host}, Port={Port}, Scheme={Scheme}, Timeout={Timeout}s, SkipCert={SkipCert}",
+            uri.Host, uri.Port, uri.Scheme, timeoutSeconds, _config.SkipCertValidation);
         var identifier = new LdapDirectoryIdentifier(uri.Host, uri.Port);
         var conn = new LdapConnection(identifier)
         {
@@ -187,6 +250,7 @@ public class LdapClient : ILdapClient, IRemotePasswordVerifier
                 conn.SessionOptions.VerifyServerCertificate = (_, _) => true;
             }
             conn.SessionOptions.SecureSocketLayer = true;
+            _logger.LogInformation("OpenConnection: SSL enabled");
         }
 
         return conn;
@@ -210,6 +274,8 @@ public class LdapClient : ILdapClient, IRemotePasswordVerifier
             var domain = ExtractDomain(upn, dn);
 
             var displayName = GetStringValue(entry, "displayName");
+            var givenName = GetStringValue(entry, "givenName");
+            var sn = GetStringValue(entry, "sn");
             var mail = GetStringValue(entry, "mail");
 
             var uacStr = GetStringValue(entry, "userAccountControl");
@@ -228,6 +294,8 @@ public class LdapClient : ILdapClient, IRemotePasswordVerifier
                 Domain: domain,
                 DistinguishedName: dn,
                 DisplayName: displayName,
+                GivenName: givenName,
+                Sn: sn,
                 Mail: mail,
                 Groups: groups,
                 Enabled: enabled);

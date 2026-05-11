@@ -13,4 +13,8 @@ public class AdConfig
     public int SearchTimeoutSeconds { get; set; } = 30;
     public int PageSize { get; set; } = 1000;
     public bool SkipCertValidation { get; set; } = false;
+
+    public string UidMode { get; set; } = "Badge";
+    public string BadgeAttribute { get; set; } = "employeeNumber";
+    public string[] RequiredGroups { get; set; } = Array.Empty<string>();
 }

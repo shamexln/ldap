@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <Fragment>
+    <UI>
+      <Dialog Id="LdapConfigDlg" Width="370" Height="270"
+              Title="[ProductName] Setup">
+
+        <!-- Top banner -->
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44"
+                 TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+
+        <!-- Title and description -->
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15"
+                 Transparent="yes" NoPrefix="yes"
+                 Text="{\WixUI_Font_Title}LDAP Configuration" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15"
+                 Transparent="yes" NoPrefix="yes"
+                 Text="Configure the LDAP/Active Directory connection." />
+
+        <!-- LDAP URL -->
+        <Control Id="LdapUrlLabel" Type="Text" X="20" Y="56" Width="320" Height="13"
+                 NoPrefix="yes"
+                 Text="LDAP Server URL:" />
+        <Control Id="LdapUrlEdit" Type="Edit" X="20" Y="70" Width="320" Height="18"
+                 Property="LDAP_URL" />
+        <Control Id="LdapUrlNote" Type="Text" X="20" Y="90" Width="320" Height="13"
+                 NoPrefix="yes"
+                 Text="e.g. ldaps://dc.example.com:636 or ldap://dc.example.com:389" />
+
+        <!-- Base DN -->
+        <Control Id="BaseDnLabel" Type="Text" X="20" Y="110" Width="320" Height="13"
+                 NoPrefix="yes"
+                 Text="Base DN:" />
+        <Control Id="BaseDnEdit" Type="Edit" X="20" Y="124" Width="320" Height="18"
+                 Property="LDAP_BASE_DN" />
+        <Control Id="BaseDnNote" Type="Text" X="20" Y="144" Width="320" Height="13"
+                 NoPrefix="yes"
+                 Text="e.g. DC=example,DC=com" />
+
+        <!-- Service Account DN -->
+        <Control Id="ServiceDnLabel" Type="Text" X="20" Y="164" Width="320" Height="13"
+                 NoPrefix="yes"
+                 Text="Service Account DN:" />
+        <Control Id="ServiceDnEdit" Type="Edit" X="20" Y="178" Width="320" Height="18"
+                 Property="LDAP_SERVICE_DN" />
+        <Control Id="ServiceDnNote" Type="Text" X="20" Y="198" Width="320" Height="13"
+                 NoPrefix="yes"
+                 Text="e.g. CN=svc-ldap,CN=Users,DC=example,DC=com" />
+
+        <!-- Auto Detect button and domain status -->
+        <Control Id="DetectBtn" Type="PushButton" X="20" Y="213" Width="80" Height="17"
+                 Text="Auto Detect">
+          <Publish Event="DoAction" Value="DetectDomainCA" Condition="1" />
+        </Control>
+        <Control Id="DomainStatus" Type="Text" X="105" Y="215" Width="245" Height="13"
+                 NoPrefix="yes"
+                 Text="Domain: [COMPUTER_DOMAIN]" />
+
+        <!-- Bottom button bar -->
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17"
+                 Text="!(loc.WixUIBack)" />
+
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17"
+                 Default="yes" Text="!(loc.WixUINext)" />
+
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17"
+                 Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+
+      </Dialog>
+    </UI>
+  </Fragment>
+
+</Wix>

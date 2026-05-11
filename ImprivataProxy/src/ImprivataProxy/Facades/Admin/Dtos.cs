@@ -5,12 +5,15 @@ public sealed record UserListItemDto(
     string Username,
     string Domain,
     string? DisplayName,
+    string? GivenName,
+    string? Sn,
     bool Enabled,
     bool HasPin,
     int CardCount,
     DateTime? PwdLockedUntil,
     DateTime? PinLockedUntil,
-    DateTime? LastSyncedAt);
+    DateTime? LastSyncedAt,
+    IReadOnlyList<string>? Groups);
 
 public sealed record CardDto(
     string Id,
@@ -26,6 +29,9 @@ public sealed record UserDetailDto(
     string Username,
     string Domain,
     string? DisplayName,
+    string? GivenName,
+    string? Sn,
+    string? Upn,
     string? AdDistinguishedName,
     string? AdObjectGuid,
     bool Enabled,
@@ -36,6 +42,7 @@ public sealed record UserDetailDto(
     DateTime? PinLockedUntil,
     DateTime? PwdHashUpdatedAt,
     DateTime? LastSyncedAt,
+    IReadOnlyList<string>? Groups,
     IReadOnlyList<CardDto> Cards);
 
 public sealed record PatchUserDto(bool? Enabled);

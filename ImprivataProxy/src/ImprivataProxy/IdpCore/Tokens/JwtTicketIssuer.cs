@@ -13,6 +13,9 @@ public class JwtTicketIssuer : ITicketIssuer
     public const string ClaimUsn = "usn";
     public const string ClaimDom = "dom";
     public const string ClaimGrp = "grp";
+    public const string ClaimGvn = "gvn";
+    public const string ClaimSnm = "snm";
+    public const string ClaimUpn = "upn";
 
     private readonly ISigningKeyProvider _keys;
     private readonly TicketConfig _config;
@@ -36,6 +39,15 @@ public class JwtTicketIssuer : ITicketIssuer
             new(ClaimDom, user.Domain),
         };
 
+        if (!string.IsNullOrEmpty(user.GivenName))
+            claims.Add(new Claim(ClaimGvn, user.GivenName));
+        if (!string.IsNullOrEmpty(user.Sn))
+            claims.Add(new Claim(ClaimSnm, user.Sn));
+
+        var upn = ParseStringAttribute(user.AttributesJson, "upn");
+        if (!string.IsNullOrEmpty(upn))
+            claims.Add(new Claim(ClaimUpn, upn));
+
         foreach (var group in ParseGroups(user.AttributesJson))
         {
             claims.Add(new Claim(ClaimGrp, group));
@@ -50,6 +62,22 @@ public class JwtTicketIssuer : ITicketIssuer
             signingCredentials: _keys.SigningCredentials);
 
         return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    private static string? ParseStringAttribute(string? attributesJson, string key)
+    {
+        if (string.IsNullOrWhiteSpace(attributesJson)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(attributesJson);
+            if (doc.RootElement.TryGetProperty(key, out var prop) &&
+                prop.ValueKind == JsonValueKind.String)
+            {
+                return prop.GetString();
+            }
+        }
+        catch { }
+        return null;
     }
 
     private static IEnumerable<string> ParseGroups(string? attributesJson)

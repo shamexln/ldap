@@ -9,6 +9,8 @@ public class User
     public string? AdObjectGuid { get; set; }
     public string? AdDistinguishedName { get; set; }
     public string? DisplayName { get; set; }
+    public string? GivenName { get; set; }
+    public string? Sn { get; set; }
 
     public string? PwdHash { get; set; }
     public DateTime? PwdHashUpdatedAt { get; set; }
