@@ -54,6 +54,7 @@ public sealed class IntegrationAppFactory : WebApplicationFactory<Program>
                 ["Ticket:Issuer"] = "imprivata-proxy",
                 ["Ticket:TtlHours"] = "1",
                 ["Database:ConnectionString"] = "Data Source=:memory:",    // overridden below
+                ["Ad:UidMode"] = "Card",  // use local card store, not badge AD search
             });
         });
 
@@ -64,13 +65,22 @@ public sealed class IntegrationAppFactory : WebApplicationFactory<Program>
             services.RemoveAll<DbContextOptions<AppDbContext>>();
             services.AddDbContext<AppDbContext>(opt => opt.UseSqlite(_conn));
 
-            // Swap the real LdapClient for the fake — registered under BOTH interfaces
-            // since it implements ILdapClient (for AD sync) and IRemotePasswordVerifier
-            // (for PwdAuthenticator). Same single instance fronts both roles.
+            // Swap the real LdapClient for the fake — registered under ALL interfaces
+            // since it implements ILdapClient (for AD sync), IRemotePasswordVerifier
+            // (for PwdAuthenticator), IOnDemandLoginProvider, and IBadgeSearchProvider.
             services.RemoveAll<ILdapClient>();
             services.RemoveAll<IRemotePasswordVerifier>();
+            services.RemoveAll<IOnDemandLoginProvider>();
+            services.RemoveAll<IBadgeSearchProvider>();
             services.AddSingleton<ILdapClient>(Ldap);
             services.AddSingleton<IRemotePasswordVerifier>(Ldap);
+            services.AddSingleton<IOnDemandLoginProvider>(Ldap);
+            services.AddSingleton<IBadgeSearchProvider>(Ldap);
+
+            // Force local card-store UID authenticator (not BadgeUidAuthenticator which
+            // needs real AD). Program.cs reads config before test overrides apply.
+            services.RemoveAll<IUidAuthenticator>();
+            services.AddScoped<IUidAuthenticator, UidAuthenticator>();
 
             // Make sure the AD sync background service never actually runs during tests;
             // remove the hosted-service registration but keep AdSyncService resolvable
@@ -100,17 +110,20 @@ public sealed class IntegrationAppFactory : WebApplicationFactory<Program>
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var hasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
 
+        // pwdPlaintext is kept as a parameter for backward-compat of test call sites
+        // but is no longer stored locally — AD bind is always used at runtime.
+        // When pwdPlaintext is provided, register it in the FakeLdap VerifyResults
+        // so integration tests pass via remote verification.
+        var userDn = dn ?? $"CN={username},OU=Users,DC=corp,DC=example,DC=com";
         var user = new Sources.Local.Entities.User
         {
             Id = id,
             Username = username,
             Domain = domain,
-            AdDistinguishedName = dn ?? $"CN={username},OU=Users,DC=corp,DC=example,DC=com",
+            AdDistinguishedName = userDn,
             AdObjectGuid = Guid.NewGuid().ToString(),
             DisplayName = displayName ?? username,
             Enabled = enabled,
-            PwdHash = pwdPlaintext is null ? null : hasher.Hash(pwdPlaintext),
-            PwdHashUpdatedAt = pwdPlaintext is null ? null : DateTime.UtcNow,
             PinHash = pinPlaintext is null ? null : hasher.Hash(pinPlaintext),
             AttributesJson = groups is null
                 ? null
@@ -131,6 +144,11 @@ public sealed class IntegrationAppFactory : WebApplicationFactory<Program>
         }
 
         await db.SaveChangesAsync();
+
+        if (pwdPlaintext is not null)
+        {
+            Ldap.VerifyResults[(userDn, pwdPlaintext)] = RemoteVerifyOutcome.Valid;
+        }
     }
 
     protected override void Dispose(bool disposing)

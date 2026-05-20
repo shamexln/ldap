@@ -49,8 +49,12 @@ public class DiscoveryIntegrationTests
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
 
         var doc = XDocument.Parse(await res.Content.ReadAsStringAsync());
-        var domains = doc.Root!.Element("Domains")!
-            .Elements("Domain").Select(e => (string?)e.Attribute("name")).ToList();
+        var domains = doc.Root!
+            .Elements("Domain")
+            .SelectMany(d => d.Elements("Name")
+                .Where(n => (string?)n.Attribute("meaning") == "NetBIOS"))
+            .Select(n => n.Value)
+            .ToList();
         Assert.Contains("CORP", domains);
         Assert.Contains("DEV", domains);
         Assert.DoesNotContain("GONE", domains);   // filtered by enabled

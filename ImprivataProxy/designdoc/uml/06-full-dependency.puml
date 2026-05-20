@@ -1,0 +1,177 @@
+@startuml 完整跨层依赖关系图
+title ImprivataProxy — 全量类依赖 & 继承关系（精简版）
+
+skinparam classAttributeIconSize 0
+skinparam linetype ortho
+left to right direction
+
+' ========== SHARED ==========
+package "Shared" as SH #F5F5F5 {
+  interface IAuditSink
+  interface IClientContextProvider
+  class UserIdentity <<record>>
+  enum PwdOrPin
+  class HttpClientContextProvider
+  HttpClientContextProvider ..|> IClientContextProvider
+}
+
+' ========== SOURCES.CONTRACTS ==========
+package "Sources.Contracts" as SC #FEFECE {
+  interface IRemotePasswordVerifier
+  interface IOnDemandLoginProvider
+  interface IBadgeSearchProvider
+  interface IUserStore
+  interface IUserDirectorySync
+  interface IAuditStore
+  interface IAuthSessionRepo
+  interface ILockoutRepo
+  interface ITicketBlacklistRepo
+}
+
+' ========== SOURCES.ACTIVEDIRECTORY ==========
+package "Sources.AD" as SAD #FFF8DC {
+  interface ILdapClient
+  class LdapClient
+  class AdSyncRunner
+  class AdSyncService
+
+  LdapClient ..|> ILdapClient
+  LdapClient ..|> IRemotePasswordVerifier
+  LdapClient ..|> IOnDemandLoginProvider
+  LdapClient ..|> IBadgeSearchProvider
+
+  AdSyncRunner ..|> IUserDirectorySync
+  AdSyncRunner ..> ILdapClient
+  AdSyncRunner ..> IUserStore
+  AdSyncRunner ..> IAuditSink
+
+  AdSyncService ..> AdSyncRunner : scoped
+}
+
+' ========== SOURCES.LOCAL ==========
+package "Sources.Local" as SL #F0FFF0 {
+  class AppDbContext
+  class UserStore
+  class EfAuditStore
+  class EfAuthSessionRepo
+  class EfLockoutRepo
+  class EfTicketBlacklistRepo
+
+  UserStore ..|> IUserStore
+  EfAuditStore ..|> IAuditStore
+  EfAuthSessionRepo ..|> IAuthSessionRepo
+  EfLockoutRepo ..|> ILockoutRepo
+  EfTicketBlacklistRepo ..|> ITicketBlacklistRepo
+
+  UserStore ..> AppDbContext
+  EfAuditStore ..> AppDbContext
+  EfAuthSessionRepo ..> AppDbContext
+  EfLockoutRepo ..> AppDbContext
+  EfTicketBlacklistRepo ..> AppDbContext
+}
+
+' ========== IDPCORE ==========
+package "IdpCore" as CORE #LightGreen {
+
+  interface IPwdAuthenticator
+  interface IUidAuthenticator
+  interface IPinAuthenticator
+  interface ILockoutPolicy
+  interface IPasswordHasher
+  interface ITicketIssuer
+  interface ITicketBlacklist
+  interface ISigningKeyProvider
+  interface IAuthSessionStore
+
+  class PwdAuthenticator
+  class UidAuthenticator
+  class BadgeUidAuthenticator
+  class PinAuthenticator
+  class LockoutPolicy
+  class PasswordHasher
+  class JwtTicketIssuer
+  class TicketBlacklistService
+  class SigningKeyProvider
+  class AuthSessionStore
+  class GroupAuthorizationChecker
+  class AuditLogSink
+
+  PwdAuthenticator ..|> IPwdAuthenticator
+  UidAuthenticator ..|> IUidAuthenticator
+  BadgeUidAuthenticator ..|> IUidAuthenticator
+  PinAuthenticator ..|> IPinAuthenticator
+  LockoutPolicy ..|> ILockoutPolicy
+  PasswordHasher ..|> IPasswordHasher
+  JwtTicketIssuer ..|> ITicketIssuer
+  TicketBlacklistService ..|> ITicketBlacklist
+  SigningKeyProvider ..|> ISigningKeyProvider
+  AuthSessionStore ..|> IAuthSessionStore
+  AuditLogSink ..|> IAuditSink
+
+  ' --- DI 依赖 ---
+  PwdAuthenticator ..> IUserStore
+  PwdAuthenticator ..> IRemotePasswordVerifier
+  PwdAuthenticator ..> IOnDemandLoginProvider
+  PwdAuthenticator ..> ILockoutPolicy
+  PwdAuthenticator ..> ITicketIssuer
+  PwdAuthenticator ..> IAuditSink
+
+  UidAuthenticator ..> IUserStore
+  UidAuthenticator ..> IAuthSessionStore
+  UidAuthenticator ..> ITicketIssuer
+  UidAuthenticator ..> IAuditSink
+
+  BadgeUidAuthenticator ..> IBadgeSearchProvider
+  BadgeUidAuthenticator ..> IUserStore
+  BadgeUidAuthenticator ..> ITicketIssuer
+  BadgeUidAuthenticator ..> IAuditSink
+  BadgeUidAuthenticator ..> GroupAuthorizationChecker
+
+  PinAuthenticator ..> IUserStore
+  PinAuthenticator ..> IAuthSessionStore
+  PinAuthenticator ..> IPasswordHasher
+  PinAuthenticator ..> ILockoutPolicy
+  PinAuthenticator ..> ITicketIssuer
+  PinAuthenticator ..> IAuditSink
+
+  LockoutPolicy ..> ILockoutRepo
+  JwtTicketIssuer ..> ISigningKeyProvider
+  TicketBlacklistService ..> ITicketBlacklistRepo
+  AuthSessionStore ..> IAuthSessionRepo
+  AuditLogSink ..> IAuditStore
+  AuditLogSink ..> IClientContextProvider
+}
+
+' ========== FACADES ==========
+package "Facades" as FAC #LightBlue {
+  interface IProtocolFacade
+  class ImprivataFacade
+  class AdminFacade
+  class AuthUserEndpoint <<static>>
+  class OStickAuthenticationHandler
+  class AdminAuthenticationHandler
+  class UsersController
+  class CardsController
+  class SyncController
+
+  ImprivataFacade ..|> IProtocolFacade
+  AdminFacade ..|> IProtocolFacade
+
+  AuthUserEndpoint ..> IPwdAuthenticator
+  AuthUserEndpoint ..> IUidAuthenticator
+  AuthUserEndpoint ..> IPinAuthenticator
+
+  OStickAuthenticationHandler ..> ISigningKeyProvider
+  OStickAuthenticationHandler ..> ITicketBlacklist
+
+  UsersController ..> IUserStore
+  UsersController ..> IPasswordHasher
+  UsersController ..> IAuditSink
+
+  CardsController ..> IUserStore
+  CardsController ..> IAuditSink
+
+  SyncController ..> AdSyncService
+}
+
+@enduml

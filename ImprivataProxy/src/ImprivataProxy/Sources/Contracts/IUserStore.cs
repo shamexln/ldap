@@ -25,12 +25,6 @@ public interface IUserStore
     Task<User?> FindEnabledForLoginAsync(string username, string domain, CancellationToken ct);
 
     /// <summary>
-    /// Update pwd_hash after a successful bind-fallback (or first login).
-    /// Sets pwd_hash_updated_at to now.
-    /// </summary>
-    Task UpdatePwdHashAsync(string userId, string pwdHash, CancellationToken ct);
-
-    /// <summary>
     /// Look up a user via an enrolled card (by card_uid_hash). Returns null if:
     ///   - no such card,
     ///   - the card has been revoked,

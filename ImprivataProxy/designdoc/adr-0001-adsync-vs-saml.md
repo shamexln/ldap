@@ -63,7 +63,7 @@ Imprivata Client ──XML──▶ Proxy
 | 凭证归谁管 | **IdP 全权**(密码、MFA、生物识别在 IdP) | AD 管密码;卡号/PIN 代理管 |
 | 信任模型 | **证书+签名**(SP 验证 IdP 签名的断言) | **账号+TLS**(服务账号 bind + DC 证书) |
 | 用户体验 | 浏览器跳转,看到 IdP 登录页 | 用户完全感知不到 AD |
-| 离线容忍 | ❌ IdP 必须在线 | ✅ 本地 argon2 命中即可 |
+| 离线容忍 | ❌ IdP 必须在线 | ❌ AD 必须可达(密码验证每次 LDAP bind,无本地哈希缓存) |
 | 适合的客户端 | 浏览器 / 支持 SAML 的 SPA / WebView | 任何后端客户端,**包括嵌入式 / 无 GUI** |
 | 协议复杂度 | 高(SP metadata / cert trust / binding / replay / NotOnOrAfter) | 低(bind + search) |
 | MFA | IdP 天然支持 | 自己实现(如 UID+PIN) |

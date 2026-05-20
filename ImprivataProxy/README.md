@@ -1,6 +1,6 @@
 # ImprivataProxy
 
-> **Last updated**: 2026-05-05
+> **Last updated**: 2026-05-12
 
 Imprivata ProveID Web API 兼容的本地身份提供者。对外说 Imprivata XML,对后端用 Active Directory(LDAPS)+ 本地 SQLite 账户库。
 
@@ -14,7 +14,7 @@ Imprivata ProveID Web API 兼容的本地身份提供者。对外说 Imprivata X
 - **对 Imprivata 客户端**:看起来就是一台 Imprivata 服务器(同样的 `/sso/ProveIDWeb/v28/*` XML 协议)
 - **对运维**:一个独立的 ASP.NET Core 服务,自己管账户库、自己发 OStick Ticket(JWT),只跟 AD 做**读同步** + **密码验证**
 - 支持三种认证场景:**PWD(用户名+密码)** / **UID(刷卡)** / **UID + PIN**
-- 密码修改交给 AD 自己管——代理通过"首次 LDAP bind 成功时缓存 argon2 哈希 + 本地验证命中/失效时回退 bind"吸收 AD 侧变更
+- 密码修改交给 AD 自己管——代理**每次**通过 LDAP bind 验证密码,不缓存本地哈希;AD 不可达时返回系统错误
 
 ---
 
@@ -56,7 +56,7 @@ sc.exe create ImprivataProxy binPath= "C:\path\to\ImprivataProxy.exe"
 | `Proxy` | `ListenAddress`, `ListenPort` |
 | `Database` | `ConnectionString`(默认 SQLite `./data/proxy.db`) |
 | `Ad` | `LdapUrl`, `BaseDn`, `ServiceAccountDn`, `SyncIntervalMinutes` |
-| `AuthPolicy` | `PwdMaxFails`, `PinMaxFails`, `PwdHashTtlDays`, `AuthSessionTtlSeconds` 等 |
+| `AuthPolicy` | `PwdMaxFails`, `PinMaxFails`, `AuthSessionTtlSeconds` 等 |
 | `Ticket` | `SigningKeyPath`, `TtlHours`, `Issuer` |
 | `Admin` | `Username`(默认 `admin`),`PasswordEnvVar` |
 
@@ -194,13 +194,13 @@ dotnet ef migrations add <Name> \
   --project src/ImprivataProxy --output-dir Accounts/Migrations
 ```
 
-当前测试数:**216**(含 30 个 HTTP 级集成用例)。
+当前测试数:**224**(含 30 个 HTTP 级集成用例 + 11 条 ArchUnit 架构规则)。
 
 ---
 
 ## 6. 安全要点
 
-- **所有密码/PIN 都 argon2id 哈希**,卡号 SHA-256 哈希
+- **PIN argon2id 哈希**,卡号 SHA-256 哈希;**密码不缓存本地哈希**,每次 LDAP bind 实时验证
 - **恒定时间比较**:Admin Basic Auth、argon2 verify 都用 `FixedTimeEquals`
 - **LDAPS 强制**:配置 `ldaps://` scheme,`System.DirectoryServices.Protocols` 自动走 TLS
 - **JWT 签名密钥**:PEM 文件,Linux 下权限自动设 0600;生产建议预置不要用自动生成

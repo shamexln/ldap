@@ -15,12 +15,6 @@ namespace ImprivataProxy.Tests;
 
 public class PwdAuthenticatorTests
 {
-    /// <summary>
-    /// In-memory IRemotePasswordVerifier stub with a configurable mapping of
-    /// (DN, password) → RemoteVerifyOutcome. Default is Invalid when no entry.
-    /// Set the outcome to <see cref="RemoteVerifyOutcome.Unreachable"/> to simulate
-    /// an upstream outage (used to be modeled by a thrown exception).
-    /// </summary>
     private sealed class FakeVerifier : IRemotePasswordVerifier
     {
         public Dictionary<(string dn, string pwd), RemoteVerifyOutcome> Results { get; } = new();
@@ -41,13 +35,14 @@ public class PwdAuthenticatorTests
         public TestDbContext Ctx { get; }
         public UserStore Store { get; }
         public FakeVerifier Remote { get; } = new();
-        public PasswordHasher Hasher { get; } = new();
+        public FakeLdapClient Ldap { get; } = new();
         public FakeTicketIssuer Tickets { get; } = new();
         public AuditLogSink Audit { get; }
         public AuthPolicyConfig Policy { get; }
+        public AdConfig AdCfg { get; }
         public PwdAuthenticator Auth { get; }
 
-        public Fixture(AuthPolicyConfig? policyOverride = null)
+        public Fixture(AuthPolicyConfig? policyOverride = null, AdConfig? adConfigOverride = null)
         {
             Ctx = new TestDbContext();
             Store = new UserStore(Ctx.Db);
@@ -56,12 +51,13 @@ public class PwdAuthenticatorTests
             {
                 PwdMaxFails = 3,
                 PwdLockoutMinutes = 15,
-                PwdHashTtlDays = 7,
             };
+            AdCfg = adConfigOverride ?? new AdConfig { Mode = "Sync" };
             var lockout = new LockoutPolicy(new EfLockoutRepo(Ctx.Db), Options.Create(Policy));
             Auth = new PwdAuthenticator(
-                Store, Remote, Hasher, lockout, Tickets, Audit,
+                Store, Remote, Ldap, lockout, Tickets, Audit,
                 Options.Create(Policy),
+                Options.Create(AdCfg),
                 NullLogger<PwdAuthenticator>.Instance);
         }
 
@@ -69,9 +65,7 @@ public class PwdAuthenticatorTests
             string username = "alice",
             string domain = "CORP",
             bool enabled = true,
-            string? dn = "CN=alice,OU=Users,DC=corp,DC=com",
-            string? pwdHash = null,
-            DateTime? pwdHashUpdatedAt = null)
+            string? dn = "CN=alice,OU=Users,DC=corp,DC=com")
         {
             var u = new User
             {
@@ -81,8 +75,6 @@ public class PwdAuthenticatorTests
                 AdObjectGuid = Guid.NewGuid().ToString(),
                 AdDistinguishedName = dn,
                 Enabled = enabled,
-                PwdHash = pwdHash,
-                PwdHashUpdatedAt = pwdHashUpdatedAt,
             };
             Ctx.Db.Users.Add(u);
             await Ctx.Db.SaveChangesAsync();
@@ -93,7 +85,7 @@ public class PwdAuthenticatorTests
     }
 
     [Fact]
-    public async Task Authenticate_FirstLogin_BindsToAd_AndCachesHash()
+    public async Task Authenticate_ValidPassword_BindsToAd_Succeeds()
     {
         using var f = new Fixture();
         var u = await f.SeedUserAsync();
@@ -104,62 +96,20 @@ public class PwdAuthenticatorTests
         var success = Assert.IsType<AuthResult.Success>(result);
         Assert.Equal(u.Id, success.User.Id);
         Assert.NotEmpty(success.Ticket);
-
-        // DB should now carry the cached hash.
-        var reloaded = f.Ctx.Db.Users.Single();
-        Assert.NotNull(reloaded.PwdHash);
-        Assert.NotNull(reloaded.PwdHashUpdatedAt);
-        Assert.True(f.Hasher.Verify("pwd1", reloaded.PwdHash!));
+        Assert.Single(f.Remote.Calls);
     }
 
     [Fact]
-    public async Task Authenticate_LocalHashHit_DoesNotCallRemote()
+    public async Task Authenticate_AlwaysCallsRemote_EvenOnSecondLogin()
     {
         using var f = new Fixture();
-        var phc = f.Hasher.Hash("pwd1");
-        await f.SeedUserAsync(pwdHash: phc, pwdHashUpdatedAt: DateTime.UtcNow);
-
-        var result = await f.Auth.AuthenticateAsync("alice", "CORP", "pwd1", default);
-
-        Assert.IsType<AuthResult.Success>(result);
-        Assert.Empty(f.Remote.Calls);          // fast path
-    }
-
-    [Fact]
-    public async Task Authenticate_LocalHashExpired_TriggersRemoteVerify()
-    {
-        using var f = new Fixture();
-        var phc = f.Hasher.Hash("pwd1");
-        var u = await f.SeedUserAsync(
-            pwdHash: phc,
-            pwdHashUpdatedAt: DateTime.UtcNow.AddDays(-30));  // past TTL (default 7 days)
+        var u = await f.SeedUserAsync();
         f.Remote.Results[(u.AdDistinguishedName!, "pwd1")] = RemoteVerifyOutcome.Valid;
 
-        var result = await f.Auth.AuthenticateAsync("alice", "CORP", "pwd1", default);
+        await f.Auth.AuthenticateAsync("alice", "CORP", "pwd1", default);
+        await f.Auth.AuthenticateAsync("alice", "CORP", "pwd1", default);
 
-        Assert.IsType<AuthResult.Success>(result);
-        Assert.Single(f.Remote.Calls);         // verify happened
-        var reloaded = f.Ctx.Db.Users.Single();
-        Assert.True(reloaded.PwdHashUpdatedAt > DateTime.UtcNow.AddMinutes(-1));  // refreshed
-    }
-
-    [Fact]
-    public async Task Authenticate_AdPasswordChanged_LocalHashReplaced()
-    {
-        using var f = new Fixture();
-        // Old hash still fresh by TTL, but password was changed at the source.
-        var oldPhc = f.Hasher.Hash("old-pwd");
-        var u = await f.SeedUserAsync(
-            pwdHash: oldPhc,
-            pwdHashUpdatedAt: DateTime.UtcNow);
-        f.Remote.Results[(u.AdDistinguishedName!, "new-pwd")] = RemoteVerifyOutcome.Valid;
-
-        var result = await f.Auth.AuthenticateAsync("alice", "CORP", "new-pwd", default);
-
-        Assert.IsType<AuthResult.Success>(result);
-        var reloaded = f.Ctx.Db.Users.Single();
-        Assert.True(f.Hasher.Verify("new-pwd", reloaded.PwdHash!));
-        Assert.False(f.Hasher.Verify("old-pwd", reloaded.PwdHash!));
+        Assert.Equal(2, f.Remote.Calls.Count);
     }
 
     [Fact]
@@ -170,7 +120,7 @@ public class PwdAuthenticatorTests
 
         var result = await f.Auth.AuthenticateAsync("alice", "CORP", "bad", default);
 
-        var fail = Assert.IsType<AuthResult.Failure>(result);
+        var fail = Assert.IsType<AuthResult.CredentialFailure>(result);
         Assert.Equal(ReturnCodes.RtcInvalidCredentials, fail.Rtc);
         Assert.Equal(1, f.Ctx.Db.Users.Single().PwdFailCount);
     }
@@ -182,14 +132,13 @@ public class PwdAuthenticatorTests
         {
             PwdMaxFails = 2,
             PwdLockoutMinutes = 15,
-            PwdHashTtlDays = 7,
         });
         await f.SeedUserAsync();
 
         await f.Auth.AuthenticateAsync("alice", "CORP", "bad", default);
         var result = await f.Auth.AuthenticateAsync("alice", "CORP", "bad", default);
 
-        var fail = Assert.IsType<AuthResult.Failure>(result);
+        var fail = Assert.IsType<AuthResult.CredentialFailure>(result);
         Assert.Equal(ReturnCodes.RtcAccountLocked, fail.Rtc);
         var reloaded = f.Ctx.Db.Users.Single();
         Assert.NotNull(reloaded.PwdLockedUntil);
@@ -254,13 +203,12 @@ public class PwdAuthenticatorTests
     {
         using var f = new Fixture();
         var u = await f.SeedUserAsync();
-        // Simulate upstream outage by returning Unreachable (previously modeled as thrown exception).
         f.Remote.Results[(u.AdDistinguishedName!, "pwd1")] = RemoteVerifyOutcome.Unreachable;
 
         var result = await f.Auth.AuthenticateAsync("alice", "CORP", "pwd1", default);
 
         var fail = Assert.IsType<AuthResult.Failure>(result);
         Assert.Equal(ReturnCodes.RtcSystemError, fail.Rtc);
-        Assert.Equal(0, f.Ctx.Db.Users.Single().PwdFailCount);    // no counter bump on system error
+        Assert.Equal(0, f.Ctx.Db.Users.Single().PwdFailCount);
     }
 }

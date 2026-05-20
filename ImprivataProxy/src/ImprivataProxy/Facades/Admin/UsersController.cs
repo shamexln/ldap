@@ -119,7 +119,7 @@ public class UsersController : ControllerBase
         u.Enabled, u.PinHash != null,
         u.PwdFailCount, u.PinFailCount,
         u.PwdLockedUntil, u.PinLockedUntil,
-        u.PwdHashUpdatedAt, u.LastSyncedAt,
+        u.LastSyncedAt,
         ParseGroups(u.AttributesJson),
         u.Cards.Select(c => new CardDto(
             c.Id, c.UserId, c.Label, c.CardUidLast4,

@@ -100,7 +100,6 @@ public interface IUserStore {
     Task UpsertFromDirectoryAsync(DirectoryUserDto dto, CancellationToken ct);
     Task DisableNotInAsync(IReadOnlySet<Guid> seenGuids, CancellationToken ct);
 
-    Task UpdatePasswordHashAsync(Guid userId, string hash, CancellationToken ct);
     Task UpdateFailCountAsync(Guid userId, PwdOrPin which, int count, DateTime? lockUntil, CancellationToken ct);
 }
 
@@ -554,7 +553,7 @@ _imprivataAuthEngine.SignTicket(...);  // Admin 直接调 Imprivata Facade!
 
 | `@startuml` 名 | 场景 | 关键契约 |
 |----------------|------|---------|
-| `adr0002-seq-pwd` | PWD 本地 hash + AD bind fallback | `IAuthenticator<PwdInput>`, `IRemotePasswordVerifier`, `IPasswordHasher` |
+| `adr0002-seq-pwd` | PWD 每次 AD bind 验证(无本地哈希缓存) | `IAuthenticator<PwdInput>`, `IRemotePasswordVerifier`, `ILockoutPolicy` |
 | `adr0002-seq-uid` | UID 单步 / 挑战 PIN 两分支 | `IAuthenticator<UidInput>`, `IAuthSessionStore` |
 | `adr0002-seq-pin` | UID+PIN 多步第 2 步 | `IAuthenticator<PinInput>`, `IAuthSessionStore`, `ILockoutPolicy` |
 
@@ -654,8 +653,8 @@ app.Run();
 | §8.4 反模式 | ✅ | 零违规 + ArchUnit CI 保护 |
 | IdpCore 不依赖 AD 特定 `ILdapClient` | ✅ | ArchUnit 规则 `IdpCore_Should_Not_Depend_On_ILdapClient` 持续保护 |
 | 双模式 LDAP 认证(Sync + OnDemand) | ✅ | `AdConfig.Mode` 切换;OnDemand:UPN bind + self-search + upsert;条件 DI;LDAP filter escaping |
-| Phase γ ArchUnitNET | ✅ | **11** 条架构规则,227/227 tests 全绿 |
-| 编译 & 测试 | ✅ | 227/227,0 warning / 0 error |
+| Phase γ ArchUnitNET | ✅ | **11** 条架构规则,224/224 tests 全绿 |
+| 编译 & 测试 | ✅ | 224/224,0 warning / 0 error |
 
 ### Deferred 项说明
 

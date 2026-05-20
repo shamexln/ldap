@@ -1,0 +1,54 @@
+@startuml Shared — 跨层契约与工具类
+title Shared 层 — 跨层契约 / HTTP 适配 / 日志 / XML
+
+skinparam classAttributeIconSize 0
+
+package "Shared.Contracts" #F5F5F5 {
+
+  interface IAuditSink {
+    +LogAsync(event, username?, domain?, detail?, ct)
+  }
+
+  interface IClientContextProvider {
+    +GetClientIp() : string?
+    +GetUserAgent() : string?
+  }
+
+  class UserIdentity <<record>> {
+    +Username : string
+    +Domain : string
+    +DistinguishedName : string?
+    +UserPrincipalName : string?
+    +ObjectGuid : Guid?
+  }
+
+  enum PwdOrPin {
+    Pwd
+    Pin
+  }
+}
+
+package "Shared.Http" #F0F8FF {
+  class HttpClientContextProvider {
+    -_http : IHttpContextAccessor
+    +GetClientIp() : string?
+    +GetUserAgent() : string?
+  }
+  HttpClientContextProvider ..|> IClientContextProvider
+  HttpClientContextProvider ..> IHttpContextAccessor
+}
+
+package "Shared.Logging" #FFF0F5 {
+  class LogSanitizer <<static>> {
+    +SanitizeXml(xml) : string
+    +SanitizeHeaders(headers) : string
+  }
+}
+
+package "Shared.Xml" #FFFFF0 {
+  class XmlHelper <<static>> {
+    +SafeParse(xml) : XDocument?
+  }
+}
+
+@enduml

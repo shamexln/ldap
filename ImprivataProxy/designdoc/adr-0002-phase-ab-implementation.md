@@ -3,7 +3,7 @@
 - **起始**: 2026-05-04
 - **最后更新**: 2026-05-08
 - **当前状态**: ✅ ADR-0002 §3 / §5 / §8 全部达标;§4 契约 **11 实现 / 2 有意延期 = 13 项**(阶段达标);IdpCore 去 AD 化完成;Gateway 集成联调通过;双模式 LDAP 认证(Sync + OnDemand)落地
-- **测试**: **227 / 227 passed**(216 单元+集成 + 11 ArchUnit 架构规则)
+- **测试**: **224 / 224 passed**(213 单元+集成 + 11 ArchUnit 架构规则)
 - **相关文档**: [adr-0002-idp-architecture.md](./adr-0002-idp-architecture.md) / [adr-0001-adsync-vs-saml.md](./adr-0001-adsync-vs-saml.md)
 - **GitHub**: [github.com/shamexln/ldap](https://github.com/shamexln/ldap) `main` 分支
 
@@ -598,11 +598,12 @@ dotnet clean && dotnet build && dotnet test     # Passed: 216
 
 **13c. `PwdAuthenticator` OnDemand 分支**:
 - 在 `user is null` 处检测 OnDemand 模式
-- `BindAndSearchSelfAsync` → 三态处理:
-  - `Valid` → `UpsertFromAdAsync` + 缓存密码 hash + 签发 ticket(path=`"ondemand_first_login"`)
+- `BindAndSearchSelfAsync`(通过 `IOnDemandLoginProvider` 接口) → 三态处理:
+  - `Valid` → `UpsertFromAdAsync` + 签发 ticket(path=`"ondemand_first_login"`)
   - `Invalid` → 返回 `RtcInvalidCredentials`
   - `Unreachable` → 返回 `RtcSystemError`(不累计 lockout)
-- 新注入:`ILdapClient` + `IOptions<AdConfig>`
+- 新注入:`IOnDemandLoginProvider` + `IOptions<AdConfig>`
+- **注意**:密码不缓存本地哈希,每次认证均通过 AD LDAP bind 实时验证
 
 **13d. 条件 DI + SyncController 适配**:
 - `Program.cs`:仅 `Mode=Sync` 时注册 `AdSyncService` + `AddHostedService`

@@ -13,7 +13,7 @@
 1. **Imprivata 协议兼容** — 客户端代码不改,只改服务器地址
 2. **本地账户 + AD 映射** — 复刻 Imprivata 自身的"独立账户库 + AD mapping"架构
 3. **AD 作为真相源** — 用户元数据和密码验证能力都从 AD 来,但代理自己管卡号 / PIN
-4. **密码修改透明化** — 密码修改交给 AD,代理的本地 argon2 哈希通过 LDAP bind 透明刷新
+4. **密码验证实时化** — 密码修改交给 AD,代理**每次**通过 LDAP bind 实时验证密码,不缓存本地哈希
 5. **无上游依赖** — 不依赖真实 Imprivata 服务器,代理就是后端
 
 ### 1.2 与旧版本的区别
@@ -24,7 +24,7 @@
 |------|--------------------|-------------------|
 | 角色 | 反向代理,透传到 Imprivata | Imprivata 协议仿真器,无上游 |
 | 身份源 | SAML IdP(ADFS/Azure AD) | Active Directory(LDAPS) |
-| 密码验证 | Imprivata 服务器做 | 代理本地 argon2 + AD LDAP bind fallback |
+| 密码验证 | Imprivata 服务器做 | 每次 AD LDAP bind 实时验证(无本地哈希缓存) |
 | 账户存储 | 无(Imprivata 管) | 代理本地 SQLite |
 | 卡号 / PIN | Imprivata 管 | 代理本地管 |
 | 核心库 | YARP + ITfoxtec SAML | EF Core + System.DirectoryServices.Protocols |
@@ -77,10 +77,11 @@ POST /sso/ProveIDWeb/v28/AuthUser
 
 **代理动作**:
 - 查本地 `users` 表(按 username + domain)
-- 优先用本地 `pwd_hash` (argon2id) 验证
-- 本地哈希不存在 / 过期 / 不匹配 → 向 AD 做 LDAP simple bind
-- bind 成功 → 重算 argon2 写回 `pwd_hash`(透明缓存)
-- 签 JWT OStick Ticket 返回
+- 检查 lockout 状态
+- 通过 `IRemotePasswordVerifier`(LDAP simple bind)实时验证密码
+- bind 成功 → 重置失败计数 + 签 JWT OStick Ticket 返回
+- bind 失败 → 累计失败计数,达到阈值则锁定
+- AD 不可达 → 返回系统错误(不累计 lockout)
 
 #### 场景 2: Badge UID(NumBadge 实时 AD 查询认证)
 
@@ -339,12 +340,11 @@ DB --> A : user row (或 null)
 
 alt 用户不存在 且 OnDemand 模式
   note right of A #FFFACD: OnDemand 自注册路径\n用户首次登录,本地无记录
-  A -> L : BindAndSearchSelf(user, domain, pwd)
+  A -> L : BindAndSearchSelf(user, domain, pwd)\n(via IOnDemandLoginProvider)
   L -> AD : LDAPS bind(user_dn, pwd)\n+ search 获取用户属性
   AD --> L : bind result + user attributes
   alt bind 成功 + 属性获取成功
     A -> DB : UpsertFromAd(user_attributes)
-    A -> DB : UpdatePwdHash(argon2(pwd))
     A -> T : IssueTicket(user)
     T --> A : JWT
     A --> E : Success + Ticket (path=ondemand_first_login)
@@ -355,40 +355,21 @@ else 用户不存在 (Sync 模式) / 禁用
   A --> E : Failure (disp=4, rtc=1001)
 else 锁定中
   A --> E : Failure (disp=4, rtc=1010)
-else 有 pwd_hash 且未过 TTL
-  A -> A : argon2_verify(pwd, pwd_hash)
-  alt 本地验证成功
+else 用户存在且未锁定
+  A -> L : RemoteVerify(identity, pwd)\n(via IRemotePasswordVerifier)
+  L -> AD : LDAPS simple bind
+  AD --> L : success / failure / unreachable
+  alt bind 成功
+    A -> DB : 重置 pwd_fail_count = 0
     A -> T : IssueTicket(user)
     T --> A : JWT
-    A --> E : Success + Ticket (path=local_hash)
-  else 本地验证失败
-    note right of A: hash 可能过期,走 fallback
-    A -> L : RemoteVerify(identity, pwd)
-    L -> AD : LDAPS simple bind
-    AD --> L : success / failure
-    alt bind 成功
-      A -> DB : UPDATE pwd_hash = argon2(pwd)
-      A -> T : IssueTicket(user)
-      T --> A : JWT
-      A --> E : Success + Ticket (path=bind_fallback)
-    else bind 失败
-      A -> DB : pwd_fail_count++
-      A --> E : Failure (disp=4, rtc=1001)
-    else AD 不可达
-      A --> E : Failure (rtc=9999, "system error")
-    end
-  end
-else 首次登录 (pwd_hash = NULL, Sync 模式)
-  A -> L : RemoteVerify(identity, pwd)
-  L -> AD : LDAPS simple bind
-  AD --> L : success / failure
-  alt bind 成功
-    A -> DB : UPDATE pwd_hash = argon2(pwd)
-    A -> T : IssueTicket(user)
-    A --> E : Success + Ticket (path=bind_fallback)
-  else bind 失败
+    A --> E : Success + Ticket (path=ad_bind)
+  else bind 失败(密码错误)
     A -> DB : pwd_fail_count++
-    A --> E : Failure
+    A --> E : Failure (disp=4, rtc=1001)
+  else AD 不可达
+    note right of A: 不累计 lockout
+    A --> E : Failure (rtc=9999, "system error")
   end
 end
 
@@ -503,12 +484,11 @@ CREATE TABLE users (
   username              TEXT NOT NULL,
   domain                TEXT NOT NULL,
   ad_object_guid        TEXT UNIQUE,         -- AD objectGUID(同步主键)
-  ad_distinguished_name TEXT,                -- 供 PWD bind fallback 使用
+  ad_distinguished_name TEXT,                -- 供 LDAP bind 验证密码使用
   display_name          TEXT,
   given_name            TEXT,                -- AD givenName(名)
   sn                    TEXT,                -- AD sn(姓)
-  pwd_hash              TEXT,                -- argon2id,NULL=尚未 bootstrap
-  pwd_hash_updated_at   DATETIME,            -- 用于 TTL 失效
+  -- pwd_hash / pwd_hash_updated_at 已移除:密码不再缓存本地哈希,每次通过 AD LDAP bind 实时验证
   pin_hash              TEXT,                -- argon2id,NULL=该用户不要求 PIN
   pin_fail_count        INTEGER DEFAULT 0,
   pin_locked_until      DATETIME,
@@ -646,7 +626,6 @@ audit("ad_sync_completed", added, updated, disabled, duration)
 ### 5.5 Upsert 规则(关键)
 
 **绝对不动的本地字段**(sync 纯读取 AD 元数据,不能覆盖运行时状态):
-- `pwd_hash`, `pwd_hash_updated_at`
 - `pin_hash`, `pin_fail_count`, `pin_locked_until`
 - `pwd_fail_count`, `pwd_locked_until`
 - `user_cards` 全表
@@ -678,16 +657,16 @@ foreach (u in stale) u.Enabled = false;
 | AD 中用户改名 | `objectGUID` 不变,upsert 走 update,username 自动更新 |
 | AD 中用户删除 | 扫尾置 `enabled=0`,不物理删除 |
 | AD 中 disabled 用户 | 拉回后 `enabled=0`,登录时被拒 |
-| 同步中有人登录 | EF Core 并发没问题;sync 不写 `pwd_hash`,登录时才写,无冲突 |
+| 同步中有人登录 | EF Core 并发没问题;sync 只写用户元数据,密码验证走 AD bind,无冲突 |
 | OU > 10k 用户 | Paged search 自动分页;超大(100k+)再上 DirSync 增量 |
 | 服务账号密码过期 | Bind 失败 → 告警 + 审计 → sync 失败,不扫尾 |
 
 ### 5.8 Bootstrap vs 持续同步
 
 **第一次 sync(空 DB)**:
-- 所有 AD 用户 INSERT,`pwd_hash=NULL`, `pin_hash=NULL`, `enabled=UAC 位`
+- 所有 AD 用户 INSERT,`pin_hash=NULL`, `enabled=UAC 位`
 - 用户此时**不能用 UID/PIN 登录**(未发卡未设 PIN)
-- 用户**能用 PWD 登录**:首次 LDAP bind fallback → bind 成功 → `pwd_hash` 被填充并长驻
+- 用户**能用 PWD 登录**:每次通过 AD LDAP bind 实时验证,无需本地缓存
 
 **卡号 / PIN 填充路径(独立于 sync)**:
 - `POST /admin/cards` → 插 `user_cards`
@@ -718,7 +697,6 @@ foreach (u in stale) u.Enabled = false;
     │     └─ 找到 ↓
     │
     ├─ 4. UpsertFromAdAsync(adUser) → 创建/更新本地用户记录
-    │     缓存密码 hash(argon2)
     │
     └─ 5. return Success(签发 ticket,path="ondemand_first_login")
 ```
@@ -728,7 +706,7 @@ foreach (u in stale) u.Enabled = false;
 - **LDAP filter escaping**:防止用户名注入(`EscapeLdapFilter` 转义 `\*()` + NUL)
 - **条件 DI**:`Program.cs` 仅 `Mode=Sync` 时注册 `AdSyncService`;OnDemand 模式 `SyncController` 返回 404
 - **向后兼容**:默认 `Mode=Sync`,现有部署无需改配置
-- **后续登录**:用户已存在于本地 DB → 走现有 local hash / bind fallback 逻辑,和 Sync 模式完全一致
+- **后续登录**:用户已存在于本地 DB → 走 AD LDAP bind 实时验证逻辑,和 Sync 模式完全一致
 
 ---
 
@@ -920,7 +898,6 @@ ImprivataProxy/
     "PwdLockoutMinutes": 15,
     "PinMaxFails": 3,
     "PinLockoutMinutes": 15,
-    "PwdHashTtlDays": 7,
     "AuthSessionTtlSeconds": 60
   },
   "Ticket": {
@@ -965,12 +942,13 @@ ImprivataProxy/
 
 ## 9. 关键设计决策
 
-### 9.1 密码透明 AD 缓存
+### 9.1 密码 AD 实时验证(无本地缓存)
 
-登录时优先本地 argon2 验证;本地无哈希/不匹配/TTL 过期 → fallback 到 AD LDAP bind;bind 成功后把新密码哈希写回本地。这样:
-- 用户在 AD 改密后,下次登录自动同步
-- 后续登录走本地快速验证,不拖累 AD
-- AD 不可达时,已登录过的用户仍能用本地哈希登录(可选配置)
+每次密码登录均通过 AD LDAP bind 实时验证,**不缓存本地密码哈希**。设计考量:
+- **安全性优先**:密码哈希不存储在本地,消除数据库泄露时的密码暴露风险
+- **实时一致性**:用户在 AD 改密后立即生效,无 TTL 延迟
+- **简化逻辑**:无需 argon2 哈希生成/比对/TTL 管理,代码更简洁
+- **AD 必须可达**:如 AD 不可达,返回系统错误(rtc=9999),不做离线 fallback
 
 ### 9.2 卡号与 PIN 本地管理
 

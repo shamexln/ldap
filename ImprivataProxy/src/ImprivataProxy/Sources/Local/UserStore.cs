@@ -46,7 +46,6 @@ public class UserStore : IUserStore
                 DisplayName = dto.DisplayName,
                 GivenName = dto.GivenName,
                 Sn = dto.Sn,
-                PwdHash = null,
                 PinHash = null,
                 Enabled = dto.Enabled,
                 AttributesJson = attributes,
@@ -124,16 +123,6 @@ public class UserStore : IUserStore
         return _db.Users
             .Where(u => u.Username == username && u.Domain == domain && u.Enabled)
             .FirstOrDefaultAsync(ct);
-    }
-
-    public async Task UpdatePwdHashAsync(string userId, string pwdHash, CancellationToken ct)
-    {
-        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
-        if (user is null) return;
-        user.PwdHash = pwdHash;
-        user.PwdHashUpdatedAt = DateTime.UtcNow;
-        user.UpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync(ct);
     }
 
     public Task<Entities.User?> FindByCardUidHashAsync(string cardUidHash, CancellationToken ct)

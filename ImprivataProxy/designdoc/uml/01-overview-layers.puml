@@ -1,0 +1,43 @@
+@startuml 全局架构层次
+title ImprivataProxy — 三层架构总览
+
+skinparam packageStyle rectangle
+skinparam linetype ortho
+
+package "Facades（协议适配层）" as Facades #LightBlue {
+  [ImprivataFacade]
+  [AdminFacade]
+}
+
+package "IdpCore（认证核心层）" as IdpCore #LightGreen {
+  [PwdAuthenticator]
+  [UidAuthenticator]
+  [BadgeUidAuthenticator]
+  [PinAuthenticator]
+  [JwtTicketIssuer]
+  [AuthSessionStore]
+  [LockoutPolicy]
+  [AuditLogSink]
+}
+
+package "Sources（数据源层）" as Sources #LightYellow {
+  [LdapClient]
+  [AdSyncRunner / AdSyncService]
+  [UserStore]
+  [EfRepos (Audit/Session/Lockout/Blacklist)]
+}
+
+package "Shared（跨层契约）" as Shared #LightGray {
+  [IAuditSink]
+  [IClientContextProvider]
+  [UserIdentity / PwdOrPin]
+}
+
+Facades --> IdpCore : 调用认证/令牌/会话
+IdpCore --> Sources : 依赖数据接口\n(IUserStore / IRemotePasswordVerifier\n/ ILockoutRepo / IAuthSessionRepo)
+Facades --> Sources : Admin 控制器直接\n调用 IUserStore / AdSyncService
+Facades --> Shared : HttpClientContextProvider
+IdpCore --> Shared : IAuditSink / UserIdentity
+Sources --> Shared : PwdOrPin / LockoutState
+
+@enduml

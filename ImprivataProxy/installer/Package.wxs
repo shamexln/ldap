@@ -31,7 +31,7 @@
     <!-- ================================================================
          User-configurable properties (shown in UI dialogs)
          ================================================================ -->
-    <Property Id="LISTEN_PORT" Value="80" />
+    <Property Id="LISTEN_PORT" Value="8798" />
     <Property Id="LDAP_URL" Secure="yes" />
     <Property Id="LDAP_BASE_DN" Secure="yes" />
     <Property Id="LDAP_SERVICE_DN" Secure="yes" />

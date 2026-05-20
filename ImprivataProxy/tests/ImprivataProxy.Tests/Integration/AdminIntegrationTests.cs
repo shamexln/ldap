@@ -115,6 +115,8 @@ public class AdminIntegrationTests
             Domain: "CORP",
             DistinguishedName: "CN=alice,DC=corp",
             DisplayName: "Alice",
+            GivenName: null,
+            Sn: null,
             Mail: null,
             Groups: Array.Empty<string>(),
             Enabled: true));

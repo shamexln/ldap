@@ -1,0 +1,241 @@
+@startuml Sources — 数据源层类图
+title Sources 层 — Active Directory / 本地存储 / 契约接口
+
+skinparam classAttributeIconSize 0
+
+' ===== Sources.Contracts =====
+package "Sources.Contracts" as SC #FEFECE {
+
+  interface IRemotePasswordVerifier {
+    +VerifyAsync(identity: UserIdentity, password, ct) : RemoteVerifyResult
+  }
+
+  interface IOnDemandLoginProvider {
+    +BindAndSearchSelfAsync(username, domain, password, ct) : OnDemandLoginResult
+  }
+
+  interface IBadgeSearchProvider {
+    +SearchByBadgeAsync(badgeValue, ct) : AdUserDto?
+  }
+
+  interface IUserStore {
+    +FindEnabledForLoginAsync(username, domain, ct) : User?
+    +UpsertFromAdAsync(AdUserDto, ct) : UpsertOutcome
+    +FindByIdAsync(id, ct) : User?
+    +FindByIdWithCardsAsync(id, ct) : User?
+    +FindCardByHashAsync(hash, ct) : UserCard?
+    +ListUsersAsync(search, enabled, take, ct) : List<User>
+    +MarkStaleAsync(seenGuids, ct) : int
+    +SaveChangesAsync(ct)
+    +... (其他方法)
+  }
+
+  interface IUserDirectorySync {
+    +RunOnceAsync(ct) : SyncResult
+  }
+
+  interface IAuditStore {
+    +AppendAsync(entry, ct)
+  }
+
+  interface IAuthSessionRepo {
+    +AddAsync(session, ct)
+    +FindAsync(serverState, ct) : AuthSession?
+    +RemoveAsync(session, ct)
+    +DeleteExpiredAsync(cutoff, ct)
+    +SaveChangesAsync(ct)
+  }
+
+  interface ILockoutRepo {
+    +ReadAsync(userId, kind, ct) : LockoutState?
+    +WriteAsync(userId, kind, failCount, lockedUntil, ct)
+  }
+
+  interface ITicketBlacklistRepo {
+    +ExistsAsync(jti, ct) : bool
+    +AddAsync(entry, ct)
+    +DeleteExpiredAsync(cutoff, ct)
+    +SaveChangesAsync(ct)
+  }
+
+  enum RemoteVerifyOutcome {
+    Valid
+    Invalid
+    Unreachable
+  }
+
+  class RemoteVerifyResult <<record>> {
+    +Outcome : RemoteVerifyOutcome
+    +Diagnostic : string?
+  }
+
+  class OnDemandLoginResult <<record>> {
+    +Outcome : RemoteVerifyOutcome
+    +User : AdUserDto?
+    +Diagnostic : string?
+  }
+
+  class LockoutState <<record>> {
+    +FailCount : int
+    +LockedUntil : DateTime?
+  }
+}
+
+' ===== Sources.ActiveDirectory =====
+package "Sources.ActiveDirectory" as AD #FFF8DC {
+
+  interface ILdapClient {
+    +SearchAllUsersAsync(ct) : IAsyncEnumerable<AdUserDto>
+  }
+
+  class LdapClient {
+    -_config : AdConfig
+    ~OpenConnection(timeoutSeconds) : LdapConnection
+    ~TryMapEntry(entry) : AdUserDto?
+  }
+  LdapClient ..|> ILdapClient
+  LdapClient ..|> IRemotePasswordVerifier
+  LdapClient ..|> IOnDemandLoginProvider
+  LdapClient ..|> IBadgeSearchProvider
+
+  class AdSyncRunner {
+    -_ldap : ILdapClient
+    -_users : IUserStore
+    -_audit : IAuditSink
+  }
+  AdSyncRunner ..|> IUserDirectorySync
+  AdSyncRunner ..> ILdapClient
+  AdSyncRunner ..> IUserStore
+  AdSyncRunner ..> IAuditSink
+
+  class AdSyncService <<BackgroundService>> {
+    -_config : AdConfig
+    -_serviceProvider : IServiceProvider
+    +TriggerAsync(ct) : SyncResult?
+    #ExecuteAsync(ct)
+  }
+  AdSyncService --|> BackgroundService
+  AdSyncService ..> AdSyncRunner : 创建 scoped 实例
+
+  class AdUserDto <<record>> {
+    +ObjectGuid : Guid
+    +Username : string
+    +Domain : string
+    +DistinguishedName : string
+    +DisplayName : string?
+    +GivenName : string?
+    +Sn : string?
+    +Mail : string?
+    +Groups : List<string>
+    +Enabled : bool
+  }
+
+  class SyncResult <<record>> {
+    +Added : int
+    +Updated : int
+    +Unchanged : int
+    +Stale : int
+    +ElapsedMs : long
+  }
+
+  class DnParser <<static>> {
+    +ExtractLeftmostCn(dn) : string?
+    +ExtractDomainFromDn(dn) : string?
+  }
+
+  class UacFlags <<static>> {
+    +IsEnabled(uac) : bool
+  }
+}
+
+' ===== Sources.Local =====
+package "Sources.Local" as Local #F0FFF0 {
+
+  class AppDbContext <<DbContext>> {
+    +Users : DbSet<User>
+    +Cards : DbSet<UserCard>
+    +AuthSessions : DbSet<AuthSession>
+    +AuditLog : DbSet<AuditLogEntry>
+    +TicketBlacklist : DbSet<TicketBlacklistEntry>
+  }
+
+  class UserStore {
+    -_db : AppDbContext
+  }
+  UserStore ..|> IUserStore
+  UserStore ..> AppDbContext
+
+  class EfAuditStore {
+    -_db : AppDbContext
+  }
+  EfAuditStore ..|> IAuditStore
+  EfAuditStore ..> AppDbContext
+
+  class EfAuthSessionRepo {
+    -_db : AppDbContext
+  }
+  EfAuthSessionRepo ..|> IAuthSessionRepo
+  EfAuthSessionRepo ..> AppDbContext
+
+  class EfLockoutRepo {
+    -_db : AppDbContext
+  }
+  EfLockoutRepo ..|> ILockoutRepo
+  EfLockoutRepo ..> AppDbContext
+
+  class EfTicketBlacklistRepo {
+    -_db : AppDbContext
+  }
+  EfTicketBlacklistRepo ..|> ITicketBlacklistRepo
+  EfTicketBlacklistRepo ..> AppDbContext
+
+  ' --- Entities ---
+  class User <<Entity>> {
+    +Id : string
+    +Username : string
+    +Domain : string
+    +DisplayName : string?
+    +GivenName : string?
+    +Sn : string?
+    +Enabled : bool
+    +PinHash : string?
+    +AdObjectGuid : string?
+    +AdDistinguishedName : string?
+    +PwdFailCount / PwdLockedUntil
+    +PinFailCount / PinLockedUntil
+    +Cards : List<UserCard>
+  }
+
+  class UserCard <<Entity>> {
+    +Id : string
+    +UserId : string
+    +CardUidHash : string
+    +Label : string?
+  }
+
+  class AuthSession <<Entity>> {
+    +Id : string
+    +ServerState : string
+    +UserId : string
+    +PendingModality : string
+    +CreatedAt / ExpiresAt
+  }
+
+  class AuditLogEntry <<Entity>> {
+    +Id : long
+    +Timestamp : DateTime
+    +Event : string
+    +Username / Domain / ClientIp
+    +DetailJson : string?
+  }
+
+  class TicketBlacklistEntry <<Entity>> {
+    +Id : string
+    +Jti : string
+    +ExpiresAt : DateTime
+  }
+
+  User "1" *-- "*" UserCard
+}
+
+@enduml

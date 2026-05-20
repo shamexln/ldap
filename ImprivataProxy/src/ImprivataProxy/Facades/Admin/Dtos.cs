@@ -40,7 +40,6 @@ public sealed record UserDetailDto(
     int PinFailCount,
     DateTime? PwdLockedUntil,
     DateTime? PinLockedUntil,
-    DateTime? PwdHashUpdatedAt,
     DateTime? LastSyncedAt,
     IReadOnlyList<string>? Groups,
     IReadOnlyList<CardDto> Cards);

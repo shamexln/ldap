@@ -1,5 +1,6 @@
 using ImprivataProxy.Sources.Local;
 using ImprivataProxy.Shared.Contracts;
+using ImprivataProxy.Sources.Contracts;
 using ImprivataProxy.IdpCore.Audit;
 using ImprivataProxy.Sources.ActiveDirectory;
 using ImprivataProxy.Tests.Helpers;
@@ -35,6 +36,13 @@ public class AdSyncRunnerTests
                 await Task.Yield();
             }
         }
+
+        public Task<OnDemandLoginResult> BindAndSearchSelfAsync(
+            string username, string domain, string password, CancellationToken ct) =>
+            Task.FromResult(new OnDemandLoginResult(RemoteVerifyOutcome.Invalid));
+
+        public Task<AdUserDto?> SearchByBadgeAsync(string badgeValue, CancellationToken ct) =>
+            Task.FromResult<AdUserDto?>(null);
     }
 
     private static AdUserDto MakeDto(Guid guid, string username, bool enabled = true) =>
@@ -44,6 +52,8 @@ public class AdSyncRunnerTests
             Domain: "CORP",
             DistinguishedName: $"CN={username},OU=Users,DC=corp,DC=com",
             DisplayName: username,
+            GivenName: null,
+            Sn: null,
             Mail: null,
             Groups: Array.Empty<string>(),
             Enabled: enabled);
@@ -92,7 +102,7 @@ public class AdSyncRunnerTests
     }
 
     [Fact]
-    public async Task PwdHashIsPreservedAcrossSyncs()
+    public async Task PinHashIsPreservedAcrossSyncs()
     {
         using var ctx = new TestDbContext();
         var alice = Guid.NewGuid();
@@ -103,10 +113,9 @@ public class AdSyncRunnerTests
                 store, audit, NullLogger<AdSyncRunner>.Instance)
             .RunOnceAsync(default);
 
-        // Simulate first login: PWD hash cached.
+        // Simulate PIN enrollment.
         var u = await ctx.Db.Users.SingleAsync();
-        u.PwdHash = "argon2$cached";
-        u.PwdHashUpdatedAt = DateTime.UtcNow;
+        u.PinHash = "argon2$pin$cached";
         await ctx.Db.SaveChangesAsync();
 
         // Sync again with updated display name.
@@ -117,7 +126,7 @@ public class AdSyncRunnerTests
 
         var u2 = await ctx.Db.Users.SingleAsync();
         Assert.Equal("Alice Renamed", u2.DisplayName);
-        Assert.Equal("argon2$cached", u2.PwdHash);
+        Assert.Equal("argon2$pin$cached", u2.PinHash);
     }
 
     [Fact]

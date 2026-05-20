@@ -11,7 +11,7 @@ namespace ImprivataProxy.IdpCore.Authentication;
 
 public class BadgeUidAuthenticator : IUidAuthenticator
 {
-    private readonly ILdapClient _ldap;
+    private readonly IBadgeSearchProvider _badges;
     private readonly IUserStore _users;
     private readonly ITicketIssuer _tickets;
     private readonly IAuditSink _audit;
@@ -20,7 +20,7 @@ public class BadgeUidAuthenticator : IUidAuthenticator
     private readonly ILogger<BadgeUidAuthenticator> _logger;
 
     public BadgeUidAuthenticator(
-        ILdapClient ldap,
+        IBadgeSearchProvider badges,
         IUserStore users,
         ITicketIssuer tickets,
         IAuditSink audit,
@@ -28,7 +28,7 @@ public class BadgeUidAuthenticator : IUidAuthenticator
         IOptions<AdConfig> config,
         ILogger<BadgeUidAuthenticator> logger)
     {
-        _ldap = ldap;
+        _badges = badges;
         _users = users;
         _tickets = tickets;
         _audit = audit;
@@ -47,7 +47,7 @@ public class BadgeUidAuthenticator : IUidAuthenticator
         AdUserDto? dto;
         try
         {
-            dto = await _ldap.SearchByBadgeAsync(cardUid, ct);
+            dto = await _badges.SearchByBadgeAsync(cardUid, ct);
         }
         catch (Exception ex)
         {

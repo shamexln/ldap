@@ -57,9 +57,13 @@ builder.Services.AddScoped<ILockoutRepo, EfLockoutRepo>();
 builder.Services.AddScoped<IClientContextProvider, HttpClientContextProvider>();
 
 builder.Services.AddSingleton<ILdapClient, LdapClient>();
-// ADR-0002 §4.1: expose LdapClient also as IRemotePasswordVerifier (future switch point).
+// ADR-0002 §4.1: expose LdapClient under protocol-neutral interfaces (future switch points).
 builder.Services.AddSingleton<IRemotePasswordVerifier>(
     sp => (IRemotePasswordVerifier)sp.GetRequiredService<ILdapClient>());
+builder.Services.AddSingleton<IOnDemandLoginProvider>(
+    sp => (IOnDemandLoginProvider)sp.GetRequiredService<ILdapClient>());
+builder.Services.AddSingleton<IBadgeSearchProvider>(
+    sp => (IBadgeSearchProvider)sp.GetRequiredService<ILdapClient>());
 builder.Services.AddScoped<AdSyncRunner>();
 // ADR-0002 §4.1: expose AdSyncRunner also as IUserDirectorySync (future SCIM swap point).
 builder.Services.AddScoped<IUserDirectorySync>(sp => sp.GetRequiredService<AdSyncRunner>());

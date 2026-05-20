@@ -47,3 +47,18 @@ logs/
 Thumbs.db
 desktop.ini
 *.orig
+
+# --- Node / frontend ------------------------------------------------------
+node_modules/
+
+# --- WiX installer cache --------------------------------------------------
+.wix/
+
+# --- IDE / tool caches ----------------------------------------------------
+*.lscache
+
+# --- Binary artifacts not belonging in source control ---------------------
+*.dll
+*.exe
+*.pdf
+x86/

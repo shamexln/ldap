@@ -12,9 +12,6 @@ public class User
     public string? GivenName { get; set; }
     public string? Sn { get; set; }
 
-    public string? PwdHash { get; set; }
-    public DateTime? PwdHashUpdatedAt { get; set; }
-
     public string? PinHash { get; set; }
 
     public int PinFailCount { get; set; }

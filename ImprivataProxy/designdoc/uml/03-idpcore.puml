@@ -1,0 +1,201 @@
+@startuml IdpCore — 认证核心层类图
+title IdpCore 层 — 认证 / 授权 / 令牌 / 会话 / 审计
+
+skinparam classAttributeIconSize 0
+
+' ===== Authentication Contracts =====
+interface IPwdAuthenticator <<Authentication.Contracts>> {
+  +AuthenticateAsync(username, domain, password, ct) : AuthResult
+}
+
+interface IUidAuthenticator <<Authentication.Contracts>> {
+  +AuthenticateAsync(cardUid, ct) : AuthResult
+}
+
+interface IPinAuthenticator <<Authentication.Contracts>> {
+  +AuthenticateAsync(serverState, pin, ct) : AuthResult
+}
+
+interface ILockoutPolicy <<Authentication.Contracts>> {
+  +CheckAsync(userId, kind, ct) : LockoutStatus
+  +OnFailureAsync(userId, kind, ct) : LockoutStatus
+  +OnSuccessAsync(userId, kind, ct)
+}
+
+interface IPasswordHasher <<Authentication.Contracts>> {
+  +Hash(password) : string
+  +Verify(password, hash) : bool
+}
+
+' ===== AuthResult 判别联合 =====
+abstract class AuthResult <<sealed>> {
+}
+class "AuthResult.Success" as ARS {
+  +User : User
+  +Ticket : string
+}
+class "AuthResult.Pending" as ARP {
+  +ServerState : string
+  +PendingModality : string
+}
+class "AuthResult.Failure" as ARF {
+  +Rtc : string
+  +Reason : string
+}
+class "AuthResult.CredentialFailure" as ARCF {
+  +User : User
+  +Rtc : string
+  +Reason : string
+}
+ARS --|> AuthResult
+ARP --|> AuthResult
+ARF --|> AuthResult
+ARCF --|> AuthResult
+
+' ===== 认证器实现 =====
+class PwdAuthenticator {
+  -_users : IUserStore
+  -_remote : IRemotePasswordVerifier
+  -_onDemand : IOnDemandLoginProvider
+  -_lockout : ILockoutPolicy
+  -_tickets : ITicketIssuer
+  -_audit : IAuditSink
+  -_policy : AuthPolicyConfig
+  -_adConfig : AdConfig
+}
+PwdAuthenticator ..|> IPwdAuthenticator
+
+class UidAuthenticator {
+  -_users : IUserStore
+  -_sessions : IAuthSessionStore
+  -_tickets : ITicketIssuer
+  -_audit : IAuditSink
+  -_policy : AuthPolicyConfig
+}
+UidAuthenticator ..|> IUidAuthenticator
+
+class BadgeUidAuthenticator {
+  -_badges : IBadgeSearchProvider
+  -_users : IUserStore
+  -_tickets : ITicketIssuer
+  -_audit : IAuditSink
+  -_groupChecker : GroupAuthorizationChecker
+  -_config : AdConfig
+}
+BadgeUidAuthenticator ..|> IUidAuthenticator
+
+class PinAuthenticator {
+  -_users : IUserStore
+  -_sessions : IAuthSessionStore
+  -_hasher : IPasswordHasher
+  -_lockout : ILockoutPolicy
+  -_tickets : ITicketIssuer
+  -_audit : IAuditSink
+  -_policy : AuthPolicyConfig
+}
+PinAuthenticator ..|> IPinAuthenticator
+
+class LockoutPolicy {
+  -_repo : ILockoutRepo
+  -_policy : AuthPolicyConfig
+}
+LockoutPolicy ..|> ILockoutPolicy
+
+class PasswordHasher {
+}
+PasswordHasher ..|> IPasswordHasher
+
+class CardHasher <<static>> {
+  +Hash(cardUid) : string
+}
+
+' ===== Authorization =====
+class GroupAuthorizationChecker {
+  +IsAuthorized(userGroups, requiredGroups) : bool
+}
+
+' ===== Tokens =====
+interface ITicketIssuer <<Tokens.Contracts>> {
+  +Issue(user) : string
+}
+
+interface ITicketBlacklist <<Tokens.Contracts>> {
+  +IsRevokedAsync(jti, ct) : bool
+  +RevokeAsync(jti, expiresAt, ct)
+}
+
+interface ISigningKeyProvider <<Tokens.Contracts>> {
+  +GetSigningKey() : SecurityKey
+  +GetValidationKey() : SecurityKey
+}
+
+class JwtTicketIssuer {
+  -_keys : ISigningKeyProvider
+  -_config : TicketConfig
+}
+JwtTicketIssuer ..|> ITicketIssuer
+
+class TicketBlacklistService {
+  -_repo : ITicketBlacklistRepo
+}
+TicketBlacklistService ..|> ITicketBlacklist
+
+class SigningKeyProvider {
+  -_config : TicketConfig
+}
+SigningKeyProvider ..|> ISigningKeyProvider
+
+' ===== Sessions =====
+interface IAuthSessionStore <<Sessions.Contracts>> {
+  +CreateAsync(userId, pendingModality, ttl, ct) : AuthSession
+  +ResolveAsync(serverState, ct) : AuthSession?
+  +ConsumeAsync(session, ct)
+}
+
+class AuthSessionStore {
+  -_repo : IAuthSessionRepo
+}
+AuthSessionStore ..|> IAuthSessionStore
+
+' ===== Audit =====
+class AuditLogSink {
+  -_store : IAuditStore
+  -_clientContext : IClientContextProvider?
+}
+AuditLogSink ..|> IAuditSink
+
+' ===== 依赖箭头（DI注入） =====
+PwdAuthenticator ..> IUserStore
+PwdAuthenticator ..> IRemotePasswordVerifier
+PwdAuthenticator ..> IOnDemandLoginProvider
+PwdAuthenticator ..> ILockoutPolicy
+PwdAuthenticator ..> ITicketIssuer
+PwdAuthenticator ..> IAuditSink
+
+UidAuthenticator ..> IUserStore
+UidAuthenticator ..> IAuthSessionStore
+UidAuthenticator ..> ITicketIssuer
+UidAuthenticator ..> IAuditSink
+
+BadgeUidAuthenticator ..> IBadgeSearchProvider
+BadgeUidAuthenticator ..> IUserStore
+BadgeUidAuthenticator ..> ITicketIssuer
+BadgeUidAuthenticator ..> IAuditSink
+BadgeUidAuthenticator ..> GroupAuthorizationChecker
+
+PinAuthenticator ..> IUserStore
+PinAuthenticator ..> IAuthSessionStore
+PinAuthenticator ..> IPasswordHasher
+PinAuthenticator ..> ILockoutPolicy
+PinAuthenticator ..> ITicketIssuer
+PinAuthenticator ..> IAuditSink
+
+LockoutPolicy ..> ILockoutRepo
+
+JwtTicketIssuer ..> ISigningKeyProvider
+TicketBlacklistService ..> ITicketBlacklistRepo
+AuthSessionStore ..> IAuthSessionRepo
+AuditLogSink ..> IAuditStore
+AuditLogSink ..> IClientContextProvider
+
+@enduml

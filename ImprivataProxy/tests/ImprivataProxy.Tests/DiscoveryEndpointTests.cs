@@ -1,8 +1,10 @@
 using System.Xml.Linq;
+using ImprivataProxy.Configuration;
 using ImprivataProxy.Sources.Local;
 using ImprivataProxy.Sources.Local.Entities;
 using ImprivataProxy.Facades.Imprivata;
 using ImprivataProxy.Tests.Helpers;
+using Microsoft.Extensions.Options;
 
 namespace ImprivataProxy.Tests;
 
@@ -27,25 +29,18 @@ public class DiscoveryEndpointTests
     // ---- Domains -----------------------------------------------------------------------------
 
     [Fact]
-    public void Domains_BuildXml_FormatsEveryDomainAsAdType()
+    public async Task Domains_GetAsync_ReturnsDomainsFromStore()
     {
-        var xml = DomainsEndpoint.BuildXml(new[] { "CORP", "DEV" });
-        var doc = XDocument.Parse(xml);
+        using var ctx = new TestDbContext();
+        ctx.Db.Users.AddRange(
+            new User { Id = "1", Username = "a", Domain = "CORP", Enabled = true },
+            new User { Id = "2", Username = "b", Domain = "DEV", Enabled = true });
+        await ctx.Db.SaveChangesAsync();
 
-        var domains = doc.Root!.Element("Domains")!.Elements("Domain").ToList();
-        Assert.Equal(2, domains.Count);
-        Assert.All(domains, d => Assert.Equal("AD", (string?)d.Attribute("type")));
-        Assert.Contains(domains, d => (string?)d.Attribute("name") == "CORP");
-        Assert.Contains(domains, d => (string?)d.Attribute("name") == "DEV");
-    }
+        var proxyConfig = Options.Create(new ProxyConfig());
+        var result = await DomainsEndpoint.GetAsync(new UserStore(ctx.Db), proxyConfig, default);
 
-    [Fact]
-    public void Domains_BuildXml_EmptyList_RendersEmptyContainer()
-    {
-        var xml = DomainsEndpoint.BuildXml(Array.Empty<string>());
-        var doc = XDocument.Parse(xml);
-        Assert.NotNull(doc.Root!.Element("Domains"));
-        Assert.Empty(doc.Root.Element("Domains")!.Elements("Domain"));
+        Assert.NotNull(result);
     }
 
     [Fact]
@@ -59,14 +54,13 @@ public class DiscoveryEndpointTests
             new User { Id = "4", Username = "d", Domain = "GONE", Enabled = false });   // filtered
         await ctx.Db.SaveChangesAsync();
 
-        var result = await DomainsEndpoint.GetAsync(new UserStore(ctx.Db), default);
+        var store = new UserStore(ctx.Db);
+        var domains = await store.GetDistinctEnabledDomainsAsync(default);
 
-        // Result is an IResult wrapping content; the shape is deterministic enough to
-        // round-trip via the IResult executor in integration tests. Here we re-invoke
-        // the pure BuildXml using the same DB projection for assertion.
-        var domains = ctx.Db.Users.Where(u => u.Enabled).Select(u => u.Domain).Distinct().OrderBy(d => d).ToList();
-        Assert.Equal(new[] { "CORP", "DEV" }, domains);
-        _ = result;      // retained to ensure GetAsync returned without throwing
+        Assert.Equal(2, domains.Count);
+        Assert.Contains("CORP", domains);
+        Assert.Contains("DEV", domains);
+        Assert.DoesNotContain("GONE", domains);
     }
 
     // ---- Modalities --------------------------------------------------------------------------

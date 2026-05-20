@@ -8,7 +8,7 @@ using Microsoft.Extensions.Options;
 
 namespace ImprivataProxy.Sources.ActiveDirectory;
 
-public class LdapClient : ILdapClient, IRemotePasswordVerifier
+public class LdapClient : ILdapClient, IRemotePasswordVerifier, IOnDemandLoginProvider, IBadgeSearchProvider
 {
     // LDAP result code 49 = invalidCredentials per RFC 4511.
     private const int LdapInvalidCredentials = 49;

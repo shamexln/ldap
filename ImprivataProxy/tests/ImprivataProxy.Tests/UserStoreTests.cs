@@ -15,6 +15,8 @@ public class UserStoreTests
         string domain = "CORP",
         string dn = "CN=alice,OU=Users,DC=corp,DC=example,DC=com",
         string? display = "Alice Smith",
+        string? givenName = null,
+        string? sn = null,
         string? mail = "alice@corp.example.com",
         string[]? groups = null,
         bool enabled = true) =>
@@ -24,6 +26,8 @@ public class UserStoreTests
             Domain: domain,
             DistinguishedName: dn,
             DisplayName: display,
+            GivenName: givenName,
+            Sn: sn,
             Mail: mail,
             Groups: groups ?? new[] { "Domain Users" },
             Enabled: enabled);
@@ -41,14 +45,13 @@ public class UserStoreTests
         var user = await ctx.Db.Users.SingleAsync();
         Assert.Equal("alice", user.Username);
         Assert.Equal(dto.ObjectGuid.ToString(), user.AdObjectGuid);
-        Assert.Null(user.PwdHash);
         Assert.Null(user.PinHash);
         Assert.True(user.Enabled);
         Assert.NotNull(user.LastSyncedAt);
     }
 
     [Fact]
-    public async Task UpsertFromAd_ExistingGuid_Updates_WithoutTouchingPwdOrPinHash()
+    public async Task UpsertFromAd_ExistingGuid_Updates_WithoutTouchingPinHash()
     {
         using var ctx = new TestDbContext();
         var store = new UserStore(ctx.Db);
@@ -56,11 +59,9 @@ public class UserStoreTests
 
         await store.UpsertFromAdAsync(MakeDto(guid, display: "Old Name"), default);
 
-        // User logs in via PWD, so PwdHash gets populated; admin sets PIN.
+        // Admin sets PIN.
         var u = await ctx.Db.Users.SingleAsync();
-        u.PwdHash = "argon2$pwd$frozen";
         u.PinHash = "argon2$pin$frozen";
-        u.PwdHashUpdatedAt = DateTime.UtcNow;
         await ctx.Db.SaveChangesAsync();
 
         // Next AD sync brings updated display name.
@@ -69,7 +70,6 @@ public class UserStoreTests
         Assert.Equal(UpsertOutcome.Updated, outcome);
         var updated = await ctx.Db.Users.SingleAsync();
         Assert.Equal("New Name", updated.DisplayName);
-        Assert.Equal("argon2$pwd$frozen", updated.PwdHash);
         Assert.Equal("argon2$pin$frozen", updated.PinHash);
     }
 

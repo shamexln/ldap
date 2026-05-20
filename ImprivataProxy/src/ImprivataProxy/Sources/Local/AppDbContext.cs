@@ -24,7 +24,6 @@ public class AppDbContext : DbContext
             b.Property(u => u.AdObjectGuid).HasMaxLength(64);
             b.Property(u => u.AdDistinguishedName).HasMaxLength(512);
             b.Property(u => u.DisplayName).HasMaxLength(256);
-            b.Property(u => u.PwdHash).HasMaxLength(512);
             b.Property(u => u.PinHash).HasMaxLength(512);
 
             b.HasIndex(u => new { u.Username, u.Domain }).IsUnique();

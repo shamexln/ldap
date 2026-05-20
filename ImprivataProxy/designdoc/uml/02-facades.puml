@@ -1,0 +1,114 @@
+@startuml Facades — 协议适配层类图
+title Facades 层 — 协议适配器 & 端点
+
+skinparam classAttributeIconSize 0
+
+' ===== 契约 =====
+interface IProtocolFacade <<Facades.Contracts>> {
+  +Name : string
+  +RegisterServices(IServiceCollection)
+  +MapEndpoints(WebApplication)
+}
+
+' ===== Imprivata Facade =====
+class ImprivataFacade <<Imprivata>> {
+  +Name = "Imprivata"
+  +RegisterServices()
+  +MapEndpoints()
+}
+ImprivataFacade ..|> IProtocolFacade
+
+class OStickAuthenticationHandler <<Imprivata>> {
+  -_keys : ISigningKeyProvider
+  -_blacklist : ITicketBlacklist
+  -_ticketConfig : TicketConfig
+  +HandleAuthenticateAsync()
+}
+OStickAuthenticationHandler --|> AuthenticationHandler
+
+class "AuthUserEndpoint" as AUE <<Imprivata, static>> {
+  +PostAsync(HttpContext, IPwdAuthenticator,\n  IUidAuthenticator, IPinAuthenticator, ...) : IResult
+  +GetAsync(HttpContext) : IResult
+  +CancelAsync(HttpContext, ITicketBlacklist) : IResult
+}
+
+class ImprivataXmlParser <<Imprivata, static>> {
+  +TryParseAuthUser(string) : ImprivataAuthRequest?
+}
+
+class ImprivataXmlBuilder <<Imprivata, static>> {
+  +Success(...) : string
+  +Failure(...) : string
+  +WhoAmI(...) : string
+}
+
+class ImprivataAuthRequest <<Imprivata, record>> {
+  +ModalityId : string
+  +Username : string?
+  +Domain : string?
+  +Password : string?
+  +UniqueId : string?
+  +Pin : string?
+  +ServerState : string?
+  +CreateTicket : bool
+}
+
+class ModalitiesEndpoint <<Imprivata, static>>
+class ServersEndpoint <<Imprivata, static>>
+class DomainsEndpoint <<Imprivata, static>>
+class NotImplementedEndpoint <<Imprivata, static>>
+class OStickHeader <<Imprivata, static>>
+class ReturnCodes <<Imprivata, static>>
+
+' ===== Admin Facade =====
+class AdminFacade <<Admin>> {
+  +Name = "Admin"
+  +RegisterServices()
+  +MapEndpoints()
+}
+AdminFacade ..|> IProtocolFacade
+
+class AdminAuthenticationHandler <<Admin>> {
+  -_config : AdminConfig
+  +HandleAuthenticateAsync()
+}
+AdminAuthenticationHandler --|> AuthenticationHandler
+
+class UsersController <<Admin>> {
+  -_users : IUserStore
+  -_hasher : IPasswordHasher
+  -_audit : IAuditSink
+  +List() / GetById() / SetPin() / Unlock() / Patch()
+}
+
+class CardsController <<Admin>> {
+  -_users : IUserStore
+  -_audit : IAuditSink
+  +Issue() / Revoke()
+}
+
+class SyncController <<Admin>> {
+  -_sync : AdSyncService?
+  +Trigger() : IActionResult
+}
+
+class BasicAuthParser <<Admin, static>>
+
+' ===== 依赖关系 =====
+AUE ..> IPwdAuthenticator : 使用
+AUE ..> IUidAuthenticator : 使用
+AUE ..> IPinAuthenticator : 使用
+AUE ..> ImprivataXmlParser : 解析 XML
+AUE ..> ImprivataXmlBuilder : 构建 XML
+
+OStickAuthenticationHandler ..> ISigningKeyProvider : 验证签名
+OStickAuthenticationHandler ..> ITicketBlacklist : 检查吊销
+
+UsersController ..> IUserStore
+UsersController ..> IPasswordHasher
+UsersController ..> IAuditSink
+CardsController ..> IUserStore
+CardsController ..> IAuditSink
+SyncController ..> AdSyncService
+
+@enduml

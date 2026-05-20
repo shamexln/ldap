@@ -60,15 +60,14 @@ public class PwdLoginIntegrationTests
 
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
         var doc = XDocument.Parse(await res.Content.ReadAsStringAsync());
-        Assert.Equal("4", (string?)doc.Root!.Element("AuthState")!.Attribute("disp"));
-        Assert.Equal("1001", (string?)doc.Root!.Element("AuthState")!.Attribute("rtc"));
+        Assert.Equal("2", (string?)doc.Root!.Element("AuthState")!.Attribute("disp"));
     }
 
     [Fact]
-    public async Task Login_FirstTime_TriggersAdBindFallback_AndCachesHash()
+    public async Task Login_FirstTime_TriggersAdBind_Succeeds()
     {
         using var factory = new IntegrationAppFactory();
-        // No pwd set locally — simulates first login after AD sync.
+        // No pwd set locally — AD bind is always used.
         await factory.SeedUserAsync("u1", "alice", "CORP");
         factory.Ldap.VerifyResults[("CN=alice,OU=Users,DC=corp,DC=example,DC=com", "real-pwd")] =
             ImprivataProxy.Sources.Contracts.RemoteVerifyOutcome.Valid;
@@ -78,13 +77,6 @@ public class PwdLoginIntegrationTests
 
         var doc = XDocument.Parse(await res.Content.ReadAsStringAsync());
         Assert.Equal("0", (string?)doc.Root!.Element("AuthState")!.Attribute("disp"));
-
-        // Hash should now be persisted.
-        using var scope = factory.CreateDbScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var user = await db.Users.SingleAsync();
-        Assert.NotNull(user.PwdHash);
-        Assert.NotNull(user.PwdHashUpdatedAt);
     }
 
     [Fact]

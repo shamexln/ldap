@@ -2,7 +2,6 @@ using ImprivataProxy.Configuration;
 using ImprivataProxy.Facades.Imprivata;
 using ImprivataProxy.IdpCore.Tokens;
 using ImprivataProxy.Shared.Contracts;
-using ImprivataProxy.Sources.ActiveDirectory;
 using ImprivataProxy.Sources.Contracts;
 using ImprivataProxy.Sources.Local.Entities;
 using Microsoft.Extensions.Options;
@@ -13,8 +12,7 @@ public class PwdAuthenticator : IPwdAuthenticator
 {
     private readonly IUserStore _users;
     private readonly IRemotePasswordVerifier _remote;
-    private readonly ILdapClient _ldap;
-    private readonly IPasswordHasher _hasher;
+    private readonly IOnDemandLoginProvider _onDemand;
     private readonly ILockoutPolicy _lockout;
     private readonly ITicketIssuer _tickets;
     private readonly IAuditSink _audit;
@@ -25,8 +23,7 @@ public class PwdAuthenticator : IPwdAuthenticator
     public PwdAuthenticator(
         IUserStore users,
         IRemotePasswordVerifier remote,
-        ILdapClient ldap,
-        IPasswordHasher hasher,
+        IOnDemandLoginProvider onDemand,
         ILockoutPolicy lockout,
         ITicketIssuer tickets,
         IAuditSink audit,
@@ -36,8 +33,7 @@ public class PwdAuthenticator : IPwdAuthenticator
     {
         _users = users;
         _remote = remote;
-        _ldap = ldap;
-        _hasher = hasher;
+        _onDemand = onDemand;
         _lockout = lockout;
         _tickets = tickets;
         _audit = audit;
@@ -60,7 +56,7 @@ public class PwdAuthenticator : IPwdAuthenticator
         var user = await _users.FindEnabledForLoginAsync(username, domain, ct);
         if (user is null && IsOnDemandMode())
         {
-            var onDemand = await _ldap.BindAndSearchSelfAsync(username, domain, password, ct);
+            var onDemand = await _onDemand.BindAndSearchSelfAsync(username, domain, password, ct);
             switch (onDemand.Outcome)
             {
                 case RemoteVerifyOutcome.Valid when onDemand.User is not null:
@@ -73,8 +69,6 @@ public class PwdAuthenticator : IPwdAuthenticator
                             detail: new { reason = "ondemand_upsert_failed" }, ct: ct);
                         return new AuthResult.Failure(ReturnCodes.RtcInvalidCredentials, "invalid credentials");
                     }
-                    var hash = _hasher.Hash(password);
-                    await _users.UpdatePwdHashAsync(user.Id, hash, ct);
                     return await SucceedAsync(user, username, domain, "ondemand_first_login", ct);
 
                 case RemoteVerifyOutcome.Unreachable:
@@ -110,27 +104,14 @@ public class PwdAuthenticator : IPwdAuthenticator
             return new AuthResult.Failure(ReturnCodes.RtcAccountLocked, "account locked");
         }
 
-        // Path A: local hash present, not expired, and matches → fast success.
-        if (HasFreshLocalHash(user) && _hasher.Verify(password, user.PwdHash!))
-        {
-            return await SucceedAsync(user, username, domain, "local_hash", ct);
-        }
-
-        // Path B: fall back to the remote verifier (today: LDAP bind; future: SAML ECP / OIDC ROPC).
-        //         Covers first login, TTL expiry, and the case where the user changed
-        //         their password at the external identity source.
+        // Always verify against AD — no local password cache for security.
         var identity = BuildIdentity(user);
         var verify = await _remote.VerifyAsync(identity, password, ct);
 
         switch (verify.Outcome)
         {
             case RemoteVerifyOutcome.Valid:
-                // Refresh the local hash so subsequent logins stay fast.
-                var newHash = _hasher.Hash(password);
-                await _users.UpdatePwdHashAsync(user.Id, newHash, ct);
-                user.PwdHash = newHash;
-                user.PwdHashUpdatedAt = DateTime.UtcNow;
-                return await SucceedAsync(user, username, domain, "bind_fallback", ct);
+                return await SucceedAsync(user, username, domain, "ad_bind", ct);
 
             case RemoteVerifyOutcome.Invalid:
                 var after = await _lockout.OnFailureAsync(user.Id, PwdOrPin.Pwd, ct);
@@ -143,14 +124,12 @@ public class PwdAuthenticator : IPwdAuthenticator
 
             case RemoteVerifyOutcome.Unreachable:
             default:
-                // Outage: don't count as a failed attempt, don't consume lockout budget.
-                // User sees "system error" (retry later) rather than "invalid credentials".
-                _logger.LogError("Remote verifier unreachable for {Username}@{Domain}: {Diag}",
+                _logger.LogError("AD unreachable for {Username}@{Domain}: {Diag}",
                     username, domain, verify.Diagnostic);
                 await _audit.LogAsync("pwd_login_error",
                     username: username, domain: domain,
-                    detail: new { reason = "remote_verifier_unreachable", error = verify.Diagnostic }, ct: ct);
-                return new AuthResult.Failure(ReturnCodes.RtcSystemError, "system error");
+                    detail: new { reason = "ad_unreachable", error = verify.Diagnostic }, ct: ct);
+                return new AuthResult.Failure(ReturnCodes.RtcSystemError, "AD unreachable");
         }
     }
 
@@ -163,15 +142,6 @@ public class PwdAuthenticator : IPwdAuthenticator
             username: username, domain: domain,
             detail: new { path }, ct: ct);
         return new AuthResult.Success(user, ticket);
-    }
-
-    private bool HasFreshLocalHash(User user)
-    {
-        if (string.IsNullOrEmpty(user.PwdHash)) return false;
-        if (user.PwdHashUpdatedAt is null) return false;
-
-        var age = DateTime.UtcNow - user.PwdHashUpdatedAt.Value;
-        return age <= TimeSpan.FromDays(_policy.PwdHashTtlDays);
     }
 
     /// <summary>

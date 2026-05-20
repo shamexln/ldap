@@ -11,7 +11,7 @@ namespace ImprivataProxy.Tests.Helpers;
 /// <see cref="VerifyResults"/> keyed by (DN, password)). The same single
 /// instance is registered twice in the DI container by IntegrationAppFactory.
 /// </summary>
-public class FakeLdapClient : ILdapClient, IRemotePasswordVerifier
+public class FakeLdapClient : ILdapClient, IRemotePasswordVerifier, IOnDemandLoginProvider, IBadgeSearchProvider
 {
     /// <summary>Maps (distinguishedName, password) → outcome. Missing keys default to <see cref="RemoteVerifyOutcome.Invalid"/>.</summary>
     public Dictionary<(string dn, string pwd), RemoteVerifyOutcome> VerifyResults { get; } = new();
@@ -38,5 +38,26 @@ public class FakeLdapClient : ILdapClient, IRemotePasswordVerifier
             yield return u;
             await Task.Yield();
         }
+    }
+
+    public Task<OnDemandLoginResult> BindAndSearchSelfAsync(
+        string username, string domain, string password, CancellationToken ct)
+    {
+        var dn = $"CN={username},DC={domain}";
+        var outcome = VerifyResults.GetValueOrDefault((dn, password), RemoteVerifyOutcome.Invalid);
+        if (outcome == RemoteVerifyOutcome.Valid)
+        {
+            var user = Users.FirstOrDefault(u => u.Username == username && u.Domain == domain);
+            return Task.FromResult(new OnDemandLoginResult(RemoteVerifyOutcome.Valid, user));
+        }
+        return Task.FromResult(new OnDemandLoginResult(outcome));
+    }
+
+    public Dictionary<string, AdUserDto> BadgeUsers { get; } = new();
+
+    public Task<AdUserDto?> SearchByBadgeAsync(string badgeValue, CancellationToken ct)
+    {
+        BadgeUsers.TryGetValue(badgeValue, out var user);
+        return Task.FromResult(user);
     }
 }
